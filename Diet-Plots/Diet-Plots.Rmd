@@ -1,0 +1,250 @@
+---
+title: "Diet-Plots"
+author: 
+date: "2024-05-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(data.table)
+library(plotrix)
+library(ggpubr)
+```
+
+# Set Up
+
+```{r}
+# Define custom theme for plotting
+theme_custom <- function() {
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank(),
+        plot.background = element_rect(fill = "white", color = NA),
+        strip.background = element_rect(fill = "grey80", color = NA),
+        axis.text.y = element_text(size=15),
+        axis.text.x = element_text(size=15),
+        axis.title.y = element_text(size=15),
+        axis.title.x = element_text(size=15))}
+
+# Define function for standard error of proportion
+se.prop <- function(detections, total.scats) {
+  p_hat <- detections / total.scats
+  standard_error <- sqrt((p_hat * (1 - p_hat)) / total.scats)
+  return(standard_error)
+}
+
+convert.to.FOO <- function(x) ifelse(x >0, 1, 0)
+```
+
+# Population-Level Diet
+
+## Functional groups
+
+Load data:
+
+```{r}
+# Load diet data
+func.RRA <- read.csv("Filtering-and-QC/func.RRA.clean.csv") %>% select(-c(X))
+func.FOO <- read.csv("Filtering-and-QC/func.FOO.clean.csv") %>% select(-c(X))
+
+# Load metadata
+metadata <- read.csv("Filtering-and-QC/All_Metadata.csv")
+```
+
+Calculate average RRA and FOO for each functional group:
+
+```{r}
+# Pivot dataframes
+pivot.func.RRA <- func.RRA %>% 
+  pivot_longer(-SampleID, names_to="Func.Group", values_to = "RRA")
+
+pivot.func.FOO <- func.FOO %>% 
+  pivot_longer(-SampleID, names_to="Func.Group", values_to = "FOO")
+
+# Calculate average RRA and overall FOO
+sum.RRA <- pivot.func.RRA %>%
+  group_by(Func.Group) %>%
+  summarize(meanRRA = 100*mean(RRA), se = 100*std.error(RRA), .groups="drop") 
+
+sum.FOO <- pivot.func.FOO %>%
+  group_by(Func.Group) %>%
+  summarize(detections = sum(FOO), 
+            total.scats=n(), 
+            FOO=100*(detections/total.scats), 
+            se.FOO = 100*se.prop(detections,total.scats))
+
+# Combine data frames
+all.dat <- full_join(sum.RRA, sum.FOO, by="Func.Group")
+```
+
+Plot:
+
+```{r}
+p.func.pop <- ggplot()+
+  # RRA Data
+  geom_col(aes(x=reorder(Func.Group, -meanRRA), y=meanRRA, fill=Func.Group), data=all.dat,
+           alpha=0.5, width=0.3, position=position_nudge(x=0.1), show.legend = F)+
+  geom_errorbar(aes(x=Func.Group, ymin=meanRRA-se, ymax=meanRRA+se), data=all.dat,
+                width=.1, position=position_nudge(x=0.1))+
+  # FOO Data
+  geom_col(aes(x=reorder(Func.Group,-FOO), y=FOO, fill=Func.Group), data=all.dat, 
+           width=0.3, position=position_nudge(x=-0.2), show.legend = F)+
+  geom_errorbar(aes(x=Func.Group, ymin=FOO-se.FOO, ymax=FOO+se.FOO), data=all.dat,
+                width=.1, position=position_nudge(x=-0.2))+
+  # Graphics
+  scale_fill_brewer(palette = "Set2")+
+  scale_y_continuous(limits=c(0,103), expand = c(0, 0)) +
+  ylab("Diet Item (FOO or RRA ± SE)")+
+  theme_classic()+
+  theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1, size=10),
+        axis.title.x = element_blank(),
+        strip.background = element_blank(),
+        strip.placement = "outside")+
+  scale_x_discrete(labels = c("Small.Mammal" = "Small Mammals",
+                              "Medium.Mammal" = "Medium-Sized Mammals",
+                              "Bird" = "Birds",
+                              "Herpetofauna" = "Herptiles",
+                              "Marine.Aquatic" = "Marine Mammals"))
+
+p.func.pop
+```
+
+## Species by Season
+
+Load data:
+
+```{r}
+# Load diet data
+sp.RRA <- read.csv("Filtering-and-QC/sp.RRA.clean.csv") %>% select(-c(X))
+sp.FOO <- read.csv("Filtering-and-QC/sp.FOO.clean.csv") %>% select(-c(X))
+
+# Load category data
+species_categories <- read.csv("Diet-Plots/12S_species_categories.csv")
+```
+
+Generate data frames with average RRA and FOO per category:
+
+```{r}
+# Pivot main dataframe from wide to long format, add categories column, summarize by category, and pivot back
+sp.RRA.categories <- sp.RRA %>%
+  pivot_longer(-SampleID, names_to = "Species", values_to = "RRA") %>% 
+  left_join(species_categories, by = "Species") %>% 
+  group_by(Category, SampleID) %>%
+  summarise(Sum = sum(RRA, na.rm = TRUE)) %>%
+  pivot_wider(names_from = Category, values_from = Sum)
+
+# Create FOO dataset
+sp.FOO.categories <- sp.RRA.categories %>% mutate_if(is.numeric, convert.to.FOO)
+```
+
+Pull out the top 10 species from each data set. To do this, calculate a Total RRA or FOO column per category, sort, keeps the top 10 rows, and then pivot longer to create data frames that can be used for data visualization.
+
+```{r}
+# Pull out the top 10 categories for RRA and FOO:
+top.RRA <- sp.RRA.categories %>% 
+  data.table::transpose(make.names = "SampleID", keep.names = "Species") %>% 
+  mutate(Total = rowSums(across(where(is.numeric)), na.rm=TRUE), .after = "Species") %>% 
+  arrange(desc(Total)) %>%
+  slice(1:10) %>% #keep top 10
+  select(-c(Total)) %>%
+  data.table::transpose(make.names = "Species", keep.names = "SampleID") %>%
+  pivot_longer(-SampleID, names_to="Func.Category", values_to = "RRA")
+
+top.FOO <- sp.FOO.categories %>% 
+  data.table::transpose(make.names = "SampleID", keep.names = "Species") %>% 
+  mutate(Total = rowSums(across(where(is.numeric)), na.rm=TRUE), .after = "Species") %>% 
+  arrange(desc(Total)) %>%
+  slice(1:10) %>% #keep top 10
+  select(-c(Total)) %>%
+  data.table::transpose(make.names = "Species", keep.names = "SampleID") %>%
+  pivot_longer(-SampleID, names_to="Func.Category", values_to = "FOO")
+
+# Define levels of top 10 species to maintain plotting order
+RRA.levels <- rev(as.character(head(top.RRA$Func.Category, 10)))
+FOO.levels <- (as.character(head(top.FOO$Func.Category, 10)))
+```
+
+To plot species by seasons, prepare season metadata:
+
+```{r}
+# Define seasons
+season <- metadata %>% 
+  mutate(Biol.Season = case_when(
+    Month == 3 | Month == 4 | Month == 5 | Month == 6 ~ "Pupping",
+    Month == 7 | Month == 8 | Month == 9 | Month == 10 ~ "Dispersal",
+    Month == 11 | Month == 12 | Month == 1 | Month == 2 ~ "Mating"))  %>% 
+  select(SampleID, Biol.Season) # pull out season data
+
+# Join diet data to season data
+top.RRA.season <- left_join(top.RRA, season, by = "SampleID")
+top.FOO.season <- left_join(top.FOO, season, by = "SampleID")
+```
+
+Plot:
+
+```{r}
+# Calculate RRA and FOO per species per season
+top.RRA.biol.season <- top.RRA.season %>%
+  group_by(Biol.Season, Func.Category) %>%
+  summarize(meanRRA = 100*mean(RRA), se = 100*std.error(RRA), .groups="drop") %>% 
+  mutate(Func.Category = as.factor(Func.Category))
+
+top.FOO.biol.season <- top.FOO.season %>% 
+  group_by(Biol.Season, Func.Category) %>%  
+  summarize(detections = sum(FOO), total.scats=n(), FOO=100*(detections/total.scats),
+            se.FOO=100*se.prop(detections,total.scats))%>% 
+  mutate(Func.Category = as.factor(Func.Category))
+
+# Combine data frames
+all.dat.biol.season <- full_join(top.RRA.biol.season, top.FOO.biol.season,
+                                 by=c("Biol.Season", "Func.Category")) %>% 
+  mutate(Func.Category = factor(Func.Category, levels = FOO.levels))
+
+
+# Plot
+p.biol.season <- ggplot(all.dat.biol.season) +
+  
+  # FOO Data
+    geom_col(aes(x = Func.Category, y = FOO, fill = Biol.Season), 
+             width = 0.4, position = position_dodge(width = 0.8)) +
+    geom_errorbar(aes(x = Func.Category, ymin = FOO - se.FOO, ymax = FOO + se.FOO, 
+                      fill=Biol.Season), 
+                  width = 0.1, position = position_dodge(0.8))+
+  # RRA Data
+    geom_col(aes(x = as.numeric(Func.Category) + 0.135, y = meanRRA, 
+                 fill = Biol.Season), alpha=0.5, width = 0.4, 
+             position = position_dodge(width = 0.8))+
+  geom_errorbar(aes(x=as.numeric(Func.Category) + 0.135, 
+                    ymin = meanRRA-se, ymax = meanRRA+se, fill=Biol.Season), 
+                width=0.1, position=position_dodge(0.8))+
+
+  # Graphics
+  scale_fill_brewer(palette = "Set2")+
+  scale_y_continuous(limits=c(0,103), expand = c(0, 0))+
+  ylab("")+ xlab(NULL)+
+  theme_classic()+
+  theme(axis.ticks.x = element_blank(),
+        legend.position = "none",
+        axis.text.x = element_text(angle = 45, vjust = 1.05, hjust=1, size=10),
+        strip.background = element_blank(),
+        strip.placement = "outside")+
+  scale_x_discrete(labels = c("Water.Birds" = "Water Birds", 
+                              "Pigeons.Doves" = "Pigeons/Doves",
+                              "Poultry" = "Chicken"))
+
+p.biol.season
+```
+
+## Combined functional group and species by season plot
+
+```{r}
+ggarrange(p.func.pop, p.biol.season, 
+          labels = c("(a)", "(b)"),
+          label.x = c(0.15, 0.067),
+          label.y = c(1, 1),
+          ncol = 2, align="h", widths=c(0.3, 0.7))
+```

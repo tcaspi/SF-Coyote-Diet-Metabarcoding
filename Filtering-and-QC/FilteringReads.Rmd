@@ -1,0 +1,293 @@
+---
+title: "FilteringReads"
+author: 
+date: "2024-05-15"
+output: html_document
+---
+# Set Up
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyr)
+library(dplyr)
+library(data.table)
+library(janitor)
+```
+
+# Read in ASV tables and remove sequences flagged for removal
+
+For batch 1, sequences comprising <0.001% of the total reads have already been removed. For batch 2, start by removing these. Then for both batches, drop sequences flagged for removal due to low percent identity or query cover.
+
+```{r}
+# Batch 1
+seqs1 <- read.csv("Filtering-and-QC/batch1_reads.csv")
+seqs1 <- seqs1 %>% 
+  filter(Flag != "x") %>%
+  select(FinalName,"BLANK_MB2":ncol(seqs1))
+
+# Batch 2
+seqs2 <- read.csv("Filtering-and-QC/batch2_reads.csv")
+seqs2 <- seqs2 %>% 
+  filter(Flag != "x") %>% 
+  filter(Perc.Total >= 0.001) %>% # remove ASVs <0.001% of the total reads
+  select(FinalName,"NTC1MB12":ncol(seqs2))
+```
+
+# Aggregate by taxa
+
+```{r}
+seqs1_count <- aggregate(. ~ FinalName, seqs1, sum)
+seqs2_count <- aggregate(. ~ FinalName, seqs2, sum)
+```
+
+# Separate control from samples
+
+```{r}
+# Batch 1
+batch1_ctrls <- seqs1_count %>% select(-c("S20_3645":"S21_1194"))
+batch1_sams <- seqs1_count %>% select(1, "S20_3645":"S21_1194")
+
+# Batch 1
+batch2_ctrls <- seqs2_count %>% select(-c("RS20_3767":"S22_1016"))
+batch2_sams <- seqs2_count %>% select(1, "RS20_3767":"S22_1016")
+```
+
+# Removing non-diet items from samples
+
+Remove species that represent non-diet items including: low-level background contaminants outside the study region, positive control species, and host reads (Canis).
+
+```{r}
+# Create list of non-diet items to remove
+nondiet <- c("Antilocapra americana", "Canis", "Cervus elaphus", "Chaetodipus", "Dama dama", "Dasypterus xanthinus", "Felidae", "Homo sapiens", "Hypomesus nipponensis", "Macaca mulatta", "Mirounga", "Monarchidae", "Odocoileus", "Oreortyx pictus", "Phoebastria albatrus", "Puma concolor", "Reithrodontomys raviventris",	"Spilogale gracilis", "Tamiasciurus", "Urocyon cinereoargenteus", "Ursus americanus")
+
+# Create new dataframe that only keeps diet reads
+batch1_prey <- batch1_sams %>% 
+  filter(!FinalName %in% nondiet )
+
+batch2_prey <- batch2_sams %>% 
+  filter(!FinalName %in% nondiet )
+```
+
+# Calculate total number of reads per sample
+
+```{r}
+# Transpose dataframes
+t_batch1 <- data.table::transpose(batch1_prey, make.names = "FinalName", keep.names = "SampleID")
+t_batch2 <- data.table::transpose(batch2_prey, make.names = "FinalName", keep.names = "SampleID")
+
+# Add a column calculating the total reads in each sample
+total_batch1 <- t_batch1 %>% 
+  mutate(Total = rowSums(across(where(is.numeric)), na.rm=TRUE), .after = "SampleID")
+
+total_batch2 <- t_batch2 %>% 
+  mutate(Total = rowSums(across(where(is.numeric)), na.rm=TRUE), .after = "SampleID")
+```
+
+# Apply filtering thresholds
+
+For batch 1, remove all samples with <4,400 reads. For batch 2, remove all samples with <150 reads.
+
+```{r}
+# Remove unreliable samples (low amplification success) based on thresholds indicated above
+rm_low_batch1 <- total_batch1 %>% 
+  filter(Total >= 4400)
+
+rm_low_batch2 <- total_batch2 %>% 
+  filter(Total >= 150)
+```
+
+# Convert to proportions
+
+Convert raw number of sequence reads into proportions for each diet item. 
+
+```{r}
+prop_batch1 <- rm_low_batch1 %>%
+  select(!Total) %>% # remove the Total column
+  adorn_percentages("row")
+
+prop_batch2 <- rm_low_batch2 %>%
+  select(!Total) %>% # remove the Total column
+  adorn_percentages("row")
+```
+
+# Apply within-scat filtering
+
+Remove diet items that represent <0.5% of the reads within a scat. However, to avoid errors of omission, manually include rare and/or small-bodied prey that is present in low proportions. These diet items include: *Junco hyemalis*, *Scapanus latimanus*, Trochilidae, and *Turdus migratorius* in batch 1 and *Didelphis virginiana* and *Sorex spp.* in batch 2.
+
+```{r}
+# Define function to remove diet items representing <0.5% of reads within a scat
+suppress.to.zero <- function(x) ifelse(x <0.005, 0, x)
+
+# Apply function to batch 1
+rm.rare_batch1 <- prop_batch1 %>% 
+  mutate(across(!SampleID &!`Junco hyemalis` &!`Scapanus latimanus` 
+                &!Trochilidae &!`Turdus migratorius`, suppress.to.zero))
+
+# Apply function to batch 2
+rm.rare_batch2 <- prop_batch2 %>% 
+  mutate(across(!SampleID &!`Didelphis virginiana` &!Sorex , suppress.to.zero))
+```
+
+# Normalize
+
+After applying the suppress.to.zero function, proportions within scats no longer sum to one. The code below fixes this.
+
+```{r}
+# Pull out the non-numeric columns from the data-frame prior to transformation
+character_batch1 <- rm.rare_batch1 %>% select(SampleID)
+character_batch2 <- rm.rare_batch2 %>% select(SampleID)
+
+# Normalize numeric columns using the apply function
+norm_batch1 <-t(apply(rm.rare_batch1[,2:ncol(rm.rare_batch1)], 1, function(x) x/sum(x)))
+
+norm_batch2 <-t(apply(rm.rare_batch2[,2:ncol(rm.rare_batch2)], 1, function(x) x/sum(x)))
+```
+
+# Create species-level RRA and FOO data sets for each batch
+
+To convert from RRA to FOO, use the function defined below, which codes any amount of reads >0 as "1".
+
+```{r}
+# Add character columns back to the data frame to create the RRA data set
+batch1_RRA <- data.frame(character_batch1, norm_batch1)
+batch2_RRA <- data.frame(character_batch2, norm_batch2)
+
+# Create function for converting RRA to FOO
+convert.to.FOO <- function(x) ifelse(x >0, 1, 0)
+
+# For all columns that are numeric, apply the function above
+batch1_FOO <- batch1_RRA %>% mutate_if(is.numeric, convert.to.FOO)
+batch2_FOO <- batch2_RRA %>% mutate_if(is.numeric, convert.to.FOO)
+```
+
+# Create functional group-level RRA and FOO data sets for each batch
+
+```{r}
+# Load functional group data
+func.groups <- read.csv("Filtering-and-QC/Species_FunctionalGroups.csv")
+
+# Pivot diet data and add functional group column
+batch1_RRA_pivot <- batch1_RRA %>%
+  pivot_longer(-SampleID, names_to = "Species", values_to = "RRA") %>% 
+  left_join(func.groups, by = "Species")
+
+batch2_RRA_pivot <- batch2_RRA %>%
+  pivot_longer(-SampleID, names_to = "Species", values_to = "RRA") %>% 
+  left_join(func.groups, by = "Species")
+
+# Summarize the data by functional group and SampleID
+batch1_RRA_func <- batch1_RRA_pivot %>%
+  group_by(Group, SampleID) %>%
+  summarise(Sum = sum(RRA, na.rm = TRUE)) %>% 
+  pivot_wider(names_from = Group, values_from = Sum)
+
+batch2_RRA_func <- batch2_RRA_pivot %>%
+  group_by(Group, SampleID) %>%
+  summarise(Sum = sum(RRA, na.rm = TRUE)) %>% 
+  pivot_wider(names_from = Group, values_from = Sum)
+
+# Convert RRA to FOO
+batch1_FOO_func <- batch1_RRA_func %>% mutate_if(is.numeric, convert.to.FOO)
+batch2_FOO_func <- batch2_RRA_func %>% mutate_if(is.numeric, convert.to.FOO)
+```
+
+# Combine batch 1 and batch 2 data sets into a single RRA and FOO data frames
+
+After converting to RRA and FOO, data from each batch can be combined into a single data frame.
+
+Species-level data:
+```{r}
+# Combine species RRA
+sp.RRA_combined <- plyr::rbind.fill(batch1_RRA, batch2_RRA) %>% 
+  replace(is.na(.), 0) # replace NAs with zeros
+  
+# Identify columns where all values are zeros
+zero_columns <- sapply(sp.RRA_combined[, -1], function(col) all(col == 0))
+
+# Remove columns where all values are zeros
+sp.RRA <- sp.RRA_combined[, c(TRUE, !zero_columns)]
+
+# Reorder alphabetically
+new.order <- sort(colnames(sp.RRA[,2:ncol(sp.RRA)])) # generate alphabetical list of diet items
+sp.RRA <- sp.RRA[,c("SampleID", new.order)] #reorder species columns to be alphabetical
+
+# Convert RRA to FOO 
+sp.FOO <- sp.RRA %>% mutate_if(is.numeric, convert.to.FOO)
+```
+
+Functional group-level data:
+```{r}
+# Combine functional group RRA
+func.RRA <- plyr::rbind.fill(batch1_RRA_func, batch2_RRA_func) %>% 
+  replace(is.na(.), 0) # replace NAs with zeros
+
+# Convert RRA to FOO 
+func.FOO <- func.RRA %>% mutate_if(is.numeric, convert.to.FOO)
+```
+
+# Final cleaning of diet data
+
+Generate final data set by:
+1.  Removing samples collected outside the study region of San Francisco
+2.  Removing any samples with a known non-coyote origin (e.g., Cytb, genotyping, or intentionally collected dog samples)
+5.  Removing samples that generated no *Canis* spp. reads
+6.  Removing duplicate samples (PCR replication)
+
+The final data set will contain samples only from SF coyotes and have no duplicates introduced by technical repliation.
+
+Load metadata:
+```{r}
+# Load metadata
+metadata <- read.csv("Filtering-and-QC/All_Metadata.csv")
+  
+# Load no Canis sample list
+no.Canis <- read.csv("Filtering-and-QC/NoCanis_Scats.csv")
+zero.read.scats <- no.Canis$SampleID # make character vector of samples to exclude
+
+# Create duplicate sample removal list
+dups.to.remove <- c("S20_3767","S20_3824","S20_3825","S20_3835","S20_3838","S21_0019","S21_0069","S21_0088","S21_0101","S21_0104")
+```
+
+Clean diet data:
+```{r}
+# Define input data frames
+input <- list(func.RRA, func.FOO, sp.RRA, sp.FOO)
+
+# Define function to clean data
+clean.data <- function(x) {left_join(x, metadata, by = "SampleID") %>%
+    filter(Area == "Urban") %>%  # remove samples not in SF
+    filter((Cytb_Sp != "dog" & Cytb_Sp != "raccoon") %>% replace_na(T)) %>%
+    filter((Geno.Sp != "dog") %>% replace_na(T)) %>%
+    filter(!SampleID %in% zero.read.scats) %>%  # remove no Canis samples 
+    filter(!SampleID %in% dups.to.remove)} # remove duplicates
+    
+# Run the function on all four input data frames
+results <- lapply(input, clean.data)
+
+# Save the output as four separate data frames
+func.RRA.clean <- results[[1]]
+func.FOO.clean <- results[[2]]
+sp.RRA.output <- results[[3]]
+sp.FOO.output <- results[[4]]
+
+# Retain samples only
+func.RRA.clean <- func.RRA.clean %>% select(-c("Replicate":"Cytb_Sp"))
+func.FOO.clean <- func.FOO.clean %>% select(-c("Replicate":"Cytb_Sp"))
+sp.RRA.output <- sp.RRA.output %>% select(-c("Replicate":"Cytb_Sp"))
+sp.FOO.output <- sp.FOO.output %>% select(-c("Replicate":"Cytb_Sp"))
+
+# Identify columns from species data frame where all values are zeros
+zero_columns <- sapply(sp.RRA.output[, -1], function(col) all(col == 0))
+
+# Remove columns where all values are zeros
+sp.RRA.clean <- sp.RRA.output[, c(TRUE, !zero_columns)]
+sp.FOO.clean <- sp.FOO.output[, c(TRUE, !zero_columns)]
+```
+
+# Save filtered and cleaned diet data for subsequent analyses
+
+```{r}
+write.csv(func.RRA.clean, "Filtering-and-QC/func.RRA.clean.csv")
+write.csv(func.FOO.clean, "Filtering-and-QC/func.FOO.clean.csv")
+write.csv(sp.RRA.clean, "Filtering-and-QC/sp.RRA.clean.csv")
+write.csv(sp.FOO.clean, "Filtering-and-QC/sp.FOO.clean.csv")
+```

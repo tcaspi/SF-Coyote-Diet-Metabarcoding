@@ -1,0 +1,211 @@
+---
+title: "iNEXT"
+author: 
+date: "2024-05-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(iNEXT)
+library(data.table)
+library(tidyverse)
+library(pals)
+```
+
+# Prepare and format data
+
+Following the format for the incidence_raw data structure for the iNEXT package.
+
+## Territories
+
+```{r}
+# Loading species dataframes of the combined data
+sp.FOO <- read.csv("Filtering-and-QC/sp.FOO.clean.csv") %>% select(-c(X))
+
+# Load metadata, add territory, and select columns
+metadata <- read.csv("Filtering-and-QC/All_Metadata.csv") %>% 
+  mutate(Territory = case_when(
+    Site == "BERN" | Site == "STMA" ~ "Bernal",
+    Site == "GLEN" | Site == "LAGU" | Site == "TWIN" | Site == "MTDA" | Site == "GGHP" ~ "Glen",
+    Site == "SFGC" | Site == "OLYM" | Site == "LAKE" | Site == "FTFU" ~ "Merced",
+    Site == "BVP" | Site == "CHP" ~ "Corona",
+    Site == "TGPH" | Site == "HYDE" | Site == "FORT" ~ "Coit",
+    Site == "GGPE" ~ "GGP - East",
+    Site == "GGPW" | Site == "GGP" ~ "GGP - West",
+    Site == "LEND" | Site == "LAFY" ~ "Land's End",
+    Site == "MCLA" ~ "McLaren",
+    Site == "PRES" ~ "Presidio",
+    Site == "STFA" ~ "St. Francis",
+    Site == "SUNS" ~ "Sunset Res",
+    Site == "STGV" ~ "Stern Grove")) %>% 
+  select(c(SampleID, Category, Individual, Territory))
+
+# Create character vector of sites to drop
+drop.sites <- c("Sunset Res", "Stern Grove")
+
+# Merge data frames and add territory data
+sp_metadata <- left_join(sp.FOO, metadata, by = "SampleID")
+
+# Remove low samples sites and unnecessary columns
+sp_terr <- sp_metadata %>% 
+  filter(!Territory %in% drop.sites) %>% 
+  select(-c(Category, Individual))
+  
+# Split into list of dataframes for each territory
+sp_terr_list <- split(sp_terr, sp_terr$Territory)
+
+# Transpose dataframes, remove Territory row, and make species row names
+sp_territories <- lapply(sp_terr_list, function(x) {
+    data.table::transpose(x, make.names = "SampleID", keep.names = "Species") %>% 
+    filter(Species != "Territory") %>% 
+    remove_rownames %>% column_to_rownames(var="Species") %>% 
+    mutate_if(is.character, as.numeric)})
+```
+
+## Individuals
+
+```{r}
+# Remove keep only individuals with IDs and samples >=8
+sp_ind <- sp_metadata %>% 
+  filter(Category == "SFCoy") %>% 
+  select(-c(Category, Territory))
+
+# Create character vector of individuals to retain that have at least 8 scats
+individuals <- sp_ind %>% 
+  group_by(Individual) %>% 
+  tally() %>% 
+  filter(n>=8) %>% 
+  select(Individual)
+
+coys.to.keep <- pull(individuals, Individual)
+
+# Remove low sample individuals (n <8)
+sp_ind_filt <- sp_ind %>% 
+  filter(Individual %in% coys.to.keep)
+
+# Split into list of dataframes for each individual
+sp_ind_list <- split(sp_ind_filt, sp_ind_filt$Individual)
+
+# Transpose dataframes, remove Territory row, and make species row names
+sp_individuals <- lapply(sp_ind_list, function(x) {
+    data.table::transpose(x, make.names = "SampleID", keep.names = "Species") %>% 
+    filter(Species != "Individual") %>% 
+    remove_rownames %>% column_to_rownames(var="Species") %>% 
+    mutate_if(is.character, as.numeric)})
+```
+
+# Run iNEXT function
+
+Calculate sample size, observed species richness, sample coverage, and diversity metrics for each territory and frequently sampled individual. Generate rarefaction curve plots.
+
+## Territories
+
+```{r}
+# Colors
+colors <- MetBrewer::met.brewer("Signac", 11)
+
+# Calculate all diversity metrics
+out_terr <- iNEXT(sp_territories, q=c(0,1,2), datatype = "incidence_raw", endpoint=200)
+
+out_terr$DataInfo # get sample size (T), total number of incidences (U), observed species richness (S.obs), and sample coverage (SC) for each territory
+
+# Shannon diversity
+out_terr_shan <- iNEXT(sp_territories, q=1, datatype = "incidence_raw", endpoint=200)
+
+# Plot Shannon rarefaction curves
+df <- fortify(out_terr_shan, type=1)
+df.point <- df[which(df$Method=="Observed"),]
+df.line <- df[which(df$Method!="Observed"),]
+df.line$Method <- factor(df.line$Method,
+c("Rarefaction", "Extrapolation"),
+c("Rarefaction", "Extrapolation"))
+
+p_terr_shan_all <- ggplot(df, aes(x=x, y=y, colour=Assemblage)) +
+geom_point(size=2, data=df.point) +
+geom_line(aes(linetype=Method), lwd=0.8, data=df.line)+
+ylab("Hill-Shannon Diversity")+
+xlab("Number of fecal samples")+
+theme_light()+
+scale_colour_manual(values=colors)
+
+p_terr_shan_all
+
+# Simpson's diversity
+out_terr_simp <- iNEXT(sp_territories, q=2, datatype = "incidence_raw", endpoint = 200)
+
+# Plot Simpson rarefaction curves
+df <- fortify(out_terr_simp, type=1)
+df.point <- df[which(df$Method=="Observed"),]
+df.line <- df[which(df$Method!="Observed"),]
+df.line$Method <- factor(df.line$Method,
+c("Rarefaction", "Extrapolation"),
+c("Rarefaction", "Extrapolation"))
+
+p_terr_simp_all <- ggplot(df, aes(x=x, y=y, colour=Assemblage)) +
+geom_point(size=2, data=df.point) +
+geom_line(aes(linetype=Method), lwd=0.8, data=df.line)+
+ylab("Hill-Simpson Diversity")+
+xlab("Number of fecal samples")+
+theme_light()+
+scale_colour_manual(values=colors)
+
+p_terr_simp_all
+```
+
+## Individuals
+
+```{r}
+# Colors
+colors <- as.vector(polychrome(22))
+
+# Calculating sample coverage for each individual
+estimateD(sp_individuals, datatype="incidence_raw", base="size", level=8, q=0)
+
+# Calculate all diversity metrics
+out_ind <- iNEXT(sp_individuals, q=c(0,1,2), datatype = "incidence_raw", endpoint=200)
+
+out_ind$DataInfo # get sample size (T), total number of incidences (U), observed species richness (S.obs), and sample coverage (SC) for each individual
+
+# Shannon Diversity
+out_ind_shan <- iNEXT(sp_individuals, q=1, datatype = "incidence_raw", endpoint=50)
+
+# Plot Shannon rarefaction curves
+df <- fortify(out_ind_shan, type=1)
+df.point <- df[which(df$Method=="Observed"),]
+df.line <- df[which(df$Method!="Observed"),]
+df.line$Method <- factor(df.line$Method,
+c("Rarefaction", "Extrapolation"),
+c("Rarefaction", "Extrapolation"))
+
+p_ind_shan_all <- ggplot(df, aes(x=x, y=y, colour=Assemblage)) +
+geom_point(size=2, data=df.point, alpha=0.7) +
+geom_line(aes(linetype=Method), lwd=0.8, data=df.line, alpha=0.7)+
+ylab("Hill-Shannon Diversity")+
+xlab("Number of fecal samples")+
+theme_light()+
+scale_colour_manual(values=colors)
+
+p_ind_shan_all
+
+# Simpson Diversity
+out_ind_simp <- iNEXT(sp_individuals, q=2, datatype = "incidence_raw", endpoint=50)
+
+# Plot Simpson rarefaction curves
+df <- fortify(out_ind_simp, type=1)
+df.point <- df[which(df$Method=="Observed"),]
+df.line <- df[which(df$Method!="Observed"),]
+df.line$Method <- factor(df.line$Method,
+c("Rarefaction", "Extrapolation"),
+c("Rarefaction", "Extrapolation"))
+
+p_ind_simpson_all <- ggplot(df, aes(x=x, y=y, colour=Assemblage)) +
+geom_point(size=2, data=df.point, alpha=0.7) +
+geom_line(aes(linetype=Method), lwd=0.8, data=df.line, alpha=0.7)+
+ylab("Hill-Simpson Diversity")+
+xlab("Number of fecal samples")+
+theme_light()+
+scale_colour_manual(values=colors)
+
+p_ind_simpson_all
+```
