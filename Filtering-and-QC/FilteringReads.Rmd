@@ -7,8 +7,7 @@ output: html_document
 # Set Up
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-library(tidyr)
-library(dplyr)
+library(tidyverse)
 library(data.table)
 library(janitor)
 ```

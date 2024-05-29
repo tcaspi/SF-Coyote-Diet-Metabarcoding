@@ -30,11 +30,9 @@ se.prop <- function(detections, total.scats) {
 convert.FOO <- function(x) ifelse(x >0, 1, 0)
 
 # Load packages
-library(mgcv)
-library(ggplot2)
-library(plotrix)
-library(data.table)
 library(tidyverse)
+library(plotrix)
+library(mgcv)
 library(marginaleffects)
 library(DHARMa)
 library(car)

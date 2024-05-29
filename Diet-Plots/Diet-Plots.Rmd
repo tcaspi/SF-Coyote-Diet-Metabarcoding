@@ -7,9 +7,7 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-library(ggplot2)
-library(tidyr)
-library(dplyr)
+library(tidyverse)
 library(data.table)
 library(plotrix)
 library(ggpubr)
