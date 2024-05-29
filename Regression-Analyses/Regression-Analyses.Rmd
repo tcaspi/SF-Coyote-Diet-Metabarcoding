@@ -1,0 +1,466 @@
+---
+title: "Regression-Analyses"
+author: "Tali Caspi"
+date: "2024-05-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Set custom plot theme
+theme_custom <- function() {
+  theme_classic() +
+  theme(panel.grid.minor = element_blank(),
+        plot.background = element_rect(fill = "white", color = NA),
+        strip.background = element_rect(fill = "grey80", color = NA),
+        axis.text.y = element_text(size=10),
+        axis.text.x = element_text(size=10),
+        axis.title.y = element_text(size=12),
+        axis.title.x = element_text(size=12))}
+
+# Define function for standard error of proportion
+se.prop <- function(detections, total.scats) {
+  p_hat <- detections / total.scats
+  standard_error <- sqrt((p_hat * (1 - p_hat)) / total.scats)
+  return(standard_error)
+}
+
+# Define function for turning RRA to FOO
+convert.FOO <- function(x) ifelse(x >0, 1, 0)
+
+# Load packages
+library(mgcv)
+library(ggplot2)
+library(plotrix)
+library(data.table)
+library(tidyverse)
+library(marginaleffects)
+library(DHARMa)
+library(car)
+library(ggpubr)
+```
+
+# Anthropogenic food x impervious surface cover
+
+## Data preparation
+
+Load data:
+
+```{r}
+# Load diet data
+func.RRA <- read.csv("Filtering-and-QC/func.RRA.clean.csv") %>% select(-c(X))
+func.FOO <- read.csv("Filtering-and-QC/func.FOO.clean.csv") %>% select(-c(X))
+
+# Load metadata
+metadata <- read.csv("Filtering-and-QC/All_Metadata.csv")
+
+# Load covariate data
+covariates <- read.csv("Regression-Analyses/Territory_All_Covariates.csv")
+```
+
+Prepare territory metadata:
+
+```{r}
+# Generate territory IDs from site data
+territories <- metadata %>% 
+  select(SampleID, Site) %>%  
+  mutate(Territory = case_when(
+    Site == "BERN" | Site == "STMA" ~ "Bernal",
+    Site == "GLEN" | Site == "LAGU" | Site == "TWIN" | Site == "MTDA" | Site == "GGHP" ~ "Glen",
+    Site == "SFGC" | Site == "OLYM" | Site == "LAKE" | Site == "FTFU" ~ "Merced",
+    Site == "BVP" | Site == "CHP" ~ "Corona",
+    Site == "TGPH" | Site == "HYDE" | Site == "FORT" ~ "Coit",
+    Site == "GGPE" ~ "GGP - East",
+    Site == "GGPW" | Site == "GGP" ~ "GGP - West",
+    Site == "LEND" | Site == "LAFY" ~ "Land's End",
+    Site == "MCLA" ~ "McLaren",
+    Site == "PRES" ~ "Presidio",
+    Site == "STFA" ~ "St. Francis",
+    Site == "SUNS" ~ "Sunset Res",
+    Site == "STGV" ~ "Stern Grove"))
+
+# Make character vector of territories to drop (low sample size)
+drop.sites <- c("Stern Grove", "Sunset Res")
+```
+
+Merge territories and covariate data to diet data:
+
+```{r}
+func.RRA.cov <- left_join(func.RRA, territories, by = "SampleID") %>%
+  left_join(covariates, by = "Territory")
+
+func.FOO.cov <- left_join(func.FOO, territories, by = "SampleID") %>%
+  left_join(covariates, by = "Territory")
+```
+
+## Calculate territory-level RRA and FOO
+
+Calculate mean RRA and overall FOO for anthropogenic foods for each territory with standard errors:
+
+```{r}
+# Define input data frames
+clean.inputs.RRA <- list(func.RRA.cov)
+clean.inputs.FOO <- list(func.FOO.cov)
+
+# Define function
+calc.anthro.RRA <- function(x) {x %>% 
+  filter(!Territory %in% drop.sites) %>% 
+  group_by(Territory) %>% 
+  summarize(meanRRA = mean(Anthropogenic), 
+            se = std.error(Anthropogenic),
+            meanUrban = round(mean(Urban), digits=3), 
+            meanISA = round(mean(ISA), digits=3),
+            meanFood.Services = mean(Food.Services),
+            meanPop.Den = mean(Pop.Den.2020),
+            meanHouse.Den = mean(Housing.Den.2020))}
+
+calc.anthro.FOO <- function(x) {x %>%
+  filter(!Territory %in% drop.sites) %>% 
+  group_by(Territory) %>% 
+  summarize(detections = sum(Anthropogenic),
+            total.scats=n(), 
+            FOO=(detections/total.scats), 
+            se = se.prop(detections,total.scats),
+            meanUrban=round(mean(Urban), digits=3),
+            meanISA = round(mean(ISA), digits=3),
+            meanFood.Services = mean(Food.Services),
+            meanPop.Den = mean(Pop.Den.2020),
+            meanHouse.Den = mean(Housing.Den.2020))}
+
+# Apply function
+results.anthro.RRA <- lapply(clean.inputs.RRA, calc.anthro.RRA)
+results.anthro.FOO <- lapply(clean.inputs.FOO, calc.anthro.FOO)
+
+# Save the output
+anthro.RRA <- results.anthro.RRA[[1]]
+anthro.FOO <- results.anthro.FOO[[1]]
+```
+
+## Build models
+
+We fit a beta regression for RRA (function "gam" with family betar in mgcv) and a quasibinomial GLM (function "glm" in stats) for FOO to test the effect of percent cover of impervious surfaces, a measure of urbanization, on the proportion and frequency of anthropogenic food in each territory.
+
+### Relative read abundance
+
+```{r}
+# Construct model and interpret model
+mod.RRA.ISA <- gam(meanRRA ~ meanISA, family=betar(link="logit"), data = anthro.RRA)
+
+summary(mod.RRA.ISA)
+
+# Calculate deviance explained
+1 - mod.RRA.ISA$deviance/mod.RRA.ISA$null.deviance
+
+# Calculate average marginal effects
+mod.RRA.ISA |> avg_slopes()
+
+# Check model fit
+sim.RRA.ISA <- simulateResiduals(mod.RRA.ISA)
+plot(sim.RRA.ISA)
+```
+
+Make predictions:
+
+```{r}
+# Generate new ISA data for making predictions
+new_data <- data.frame(meanISA = seq(0, 100, by=0.1))
+
+# Make predictions on the link scale, calculate confidence interval boundaries on the link scale, then back transform using the inverse link to get boundaries on the response scale
+gam_preds <- as.data.frame(mgcv::predict.gam(mod.RRA.ISA, newdata = new_data, se.fit = TRUE, type="link")) %>% 
+  mutate(meanISA = new_data$meanISA, .before="fit") %>% 
+  mutate(upr = fit + (1.96 * se.fit),
+         lwr = fit - (1.96 * se.fit),
+         meanRRA = mod.RRA.ISA$family$linkinv(fit),
+         upr_adj = mod.RRA.ISA$family$linkinv(upr),
+         lwr_adj = mod.RRA.ISA$family$linkinv(lwr))
+```
+
+### Frequency of occurrence
+
+```{r}
+# Construct and interpret model
+mod.FOO.ISA <- glm(FOO ~ meanISA, family = "quasibinomial", weights = anthro.FOO$total.scats, data=anthro.FOO)
+
+summary(mod.FOO.ISA)
+
+# Calculate deviance explained
+1 - mod.FOO.ISA$deviance/mod.FOO.ISA$null.deviance
+
+# Calculate average marginal effects
+mod.FOO.ISA |> avg_slopes()
+
+# Check that residuals are normally distributed
+hist(resid(mod.FOO.ISA))
+
+# Check that residual plots are evenly dispersed around 0
+plot(resid(mod.FOO.ISA)~fitted(mod.FOO.ISA)) + abline(h=0)
+
+# Check that in the qqplot residuals fall along the blue line
+qqPlot(resid(mod.FOO.ISA))
+
+# Check for homogeneity of variance
+plot(mod.FOO.ISA)
+```
+
+Make predictions:
+
+```{r}
+# Generate new ISA data for making predictions
+new_data_FOO <- data.frame(meanISA = seq(0, 100, by=0.1))
+
+# Make predictions
+FOO_preds <- as.data.frame(predict(mod.FOO.ISA, newdata = new_data_FOO, se.fit = TRUE, type="link")) %>% 
+  mutate(meanISA = new_data_FOO$meanISA, .before="fit") %>% 
+  mutate(upr = fit + (1.96 * se.fit),
+         lwr = fit - (1.96 * se.fit),
+         FOO = mod.FOO.ISA$family$linkinv(fit),
+         upr_adj = mod.FOO.ISA$family$linkinv(upr),
+         lwr_adj = mod.FOO.ISA$family$linkinv(lwr))
+```
+
+## Plot
+
+```{r}
+p.anthropogenic <- ggplot()+
+  
+  # RRA data - Beta regression
+  geom_smooth(data = gam_preds, aes(x = meanISA, y = meanRRA,
+                                    ymin = lwr_adj, ymax = upr_adj), stat = 'identity',
+              color="#1F6481", fill="#1F6481", alpha=0.5)+
+  geom_point(data=anthro.RRA, aes(x=meanISA, y=meanRRA),
+             size=1.5, color="#044B69", alpha=0.8)+
+  geom_errorbar(data=anthro.RRA,
+                aes(x=meanISA, y=meanRRA,
+                    ymin=meanRRA-se, ymax=meanRRA+se), 
+                width=0.5, color="#044B69", alpha=0.8)+
+
+  # FOO data - Quasibinomial GLM
+  geom_smooth(data=FOO_preds, aes(x = meanISA, y = FOO,
+                                  ymin = lwr_adj, ymax = upr_adj), stat = 'identity',
+              color="#FAC5A6", fill="#FAC5A6", alpha=0.5)+ 
+  geom_errorbar(data=anthro.FOO,
+                aes(x=meanISA, y=FOO,
+                    ymin=FOO-se, ymax=FOO+se), 
+                width=0.5, color="#ECA276", alpha=0.8)+
+  geom_point(data=anthro.FOO, aes(x=meanISA, y=FOO),
+             size=1.5, color="#ECA276", alpha=0.8)+
+  
+# Graphics
+  labs(x = "Impervious Surface Cover",
+       y = "Anthropogenic Food (FOO or RRA ± SE)") +
+  scale_y_continuous(limits=c(0,1),
+                     breaks=c(0, 0.25, 0.50, 0.75, 1),
+                     labels=c("0","25", "50", "75", "100"))+
+  scale_x_continuous(expand=c(0,0), limits=c(0,102))+
+  theme_custom() 
+
+p.anthropogenic
+```
+
+# Invasive human-commensal rodents x number of food services
+
+## Data preparation
+
+Load data:
+
+```{r}
+sp.RRA <- read.csv("Filtering-and-QC/sp.RRA.clean.csv") %>% select(-c(X))
+sp.FOO <- read.csv("Filtering-and-QC/sp.FOO.clean.csv") %>% select(-c(X))
+```
+
+Merge territories to diet data:
+
+```{r}
+sp.RRA.site <- left_join(sp.RRA, territories, by = "SampleID") %>% 
+  left_join(covariates, by = "Territory")
+
+sp.FOO.site <- left_join(sp.FOO, territories, by = "SampleID") %>% 
+  left_join(covariates, by = "Territory")
+```
+
+## Calculate territory-level RRA and FOO for urban rodents
+
+```{r}
+# Combine Norway rat, Black rat, and House mouse
+urban.rats.mice <- c("Rattus.norvegicus", "Rattus.rattus", "Mus.musculus")
+
+# Add column that sums up the RRA for all urban rats and mice
+combine.rodents.RRA <- sp.RRA.site %>% 
+  mutate(urban.rodents = rowSums(select(., c(urban.rats.mice)))) %>% 
+  relocate(urban.rodents, .after=SampleID) %>% 
+  select(-c(Acipenser:Zalophus.californianus))
+
+combine.rodents.FOO <- sp.FOO.site %>% 
+  mutate(urban.rodents = Rattus.norvegicus + Rattus.rattus + Mus.musculus) %>% 
+  mutate_at("urban.rodents", convert.FOO) %>% 
+  relocate(urban.rodents, .after=SampleID) %>% 
+  select(-c(Acipenser:Zalophus.californianus))
+
+# Define input data frames
+inputs.RRA <- list(combine.rodents.RRA)
+inputs.FOO <- list(combine.rodents.FOO)
+
+# Define function
+calc.rodents.RRA <- function(x) {x %>% 
+  filter(!Territory %in% drop.sites) %>% 
+  group_by(Territory) %>% 
+  summarize(meanRRA = mean(urban.rodents),
+            se = std.error(urban.rodents),
+            meanUrban = round(mean(Urban), digits=3), 
+            meanISA = round(mean(ISA), digits=3),
+            meanFood.Services = mean(Food.Services),
+            meanPop.Den = mean(Pop.Den.2020),
+            meanHouse.Den = mean(Housing.Den.2020))}
+
+calc.rodents.FOO <- function(x) {x %>% 
+  filter(!Territory %in% drop.sites) %>% 
+  group_by(Territory) %>% 
+  summarize(detections = sum(urban.rodents), 
+            total.scats=n(), 
+            FOO=detections/total.scats,
+            se = se.prop(detections,total.scats),
+            meanUrban = round(mean(Urban), digits=3), 
+            meanISA = round(mean(ISA), digits=3),
+            meanFood.Services = mean(Food.Services),
+            meanPop.Den = mean(Pop.Den.2020),
+            meanHouse.Den = mean(Housing.Den.2020))}
+
+# Apply function
+results.rodents.RRA <- lapply(inputs.RRA, calc.rodents.RRA)
+results.rodents.FOO <- lapply(inputs.FOO, calc.rodents.FOO)
+
+# Save the output as four separate dataframes
+rodents.RRA <- results.rodents.RRA[[1]]
+rodents.FOO <- results.rodents.FOO[[1]]
+```
+
+## Build models
+
+We fit a beta regression for RRA (function "gam" with family betar in mgcv) and a quasibinomial GLM (function "glm" in stats) for FOO to test the effect of percent cover of impervious surfaces, a measure of urbanization, on the proportion and frequency of anthropogenic food in each territory.
+
+### Relative read abundance
+
+```{r}
+# Construct model and interpret model
+mod.RRA.rest <- gam(meanRRA ~ meanFood.Services, family=betar(link="logit"), data = rodents.RRA)
+
+summary(mod.RRA.rest)
+
+# Calculate deviance explained
+1 - mod.RRA.rest$deviance/mod.RRA.rest$null.deviance
+
+# Calculate average marginal effects
+mod.RRA.rest|> avg_slopes() 
+
+# Check model fit
+sim.RRA.rest <- simulateResiduals(mod.RRA.rest)
+plot(sim.RRA.rest)
+```
+
+Make predictions:
+
+```{r}
+# Generate new food services data for making predictions
+new_data <- data.frame(meanFood.Services = seq(0, 350, by=0.1))
+
+# Make predictions on the link scale, calculate confidence interval boundaries on the link scale, then back transform using the inverse link to get boundaries on the response scale
+gam_preds <- as.data.frame(mgcv::predict.gam(mod.RRA.rest, newdata = new_data, se.fit = TRUE, type="link")) %>% 
+  mutate(meanFood.Services = new_data$meanFood.Services, .before="fit") %>% 
+  mutate(upr = fit + (1.96 * se.fit),
+         lwr = fit - (1.96 * se.fit),
+         meanRRA = mod.RRA.rest$family$linkinv(fit),
+         upr_adj = mod.RRA.rest$family$linkinv(upr),
+         lwr_adj = mod.RRA.rest$family$linkinv(lwr))
+```
+
+### Frequency of occurrence
+
+```{r}
+# Construct and interpret model
+mod.FOO.rest <- glm(FOO~meanFood.Services, family=quasibinomial(link="logit"), weights = total.scats, data=rodents.FOO)
+
+summary(mod.FOO.rest)
+
+# Calculate deviance explained
+1 - mod.FOO.rest$deviance/mod.FOO.rest$null.deviance
+
+# Calculate average marginal effects
+mod.FOO.rest|> avg_slopes()
+
+# Check that residuals are normally distributed
+hist(resid(mod.FOO.rest))
+
+# Check that residual plots are evenly dispersed around 0
+plot(resid(mod.FOO.rest)~fitted(mod.FOO.rest)) + abline(h=0)
+
+# Check that in the qqplot residuals fall along the blue line
+qqPlot(resid(mod.FOO.rest))
+
+# Check for homogeneity of variance
+plot(mod.FOO.rest)
+```
+
+Make predictions:
+
+```{r}
+# Generate new ISA data for making predictions
+new_data_FOO <- data.frame(meanISA = seq(0, 100, by=0.1))
+
+# Make predictions
+FOO_preds <- as.data.frame(predict(mod.FOO.rest, newdata = new_data, se.fit = TRUE, type="link")) %>% 
+  mutate(meanFood.Services = new_data$meanFood.Services, .before="fit") %>% 
+  mutate(upr = fit + (1.96 * se.fit),
+         lwr = fit - (1.96 * se.fit),
+         FOO = mod.FOO.rest$family$linkinv(fit),
+         upr_adj = mod.FOO.rest$family$linkinv(upr),
+         lwr_adj = mod.FOO.rest$family$linkinv(lwr))
+```
+
+## Plot
+
+```{r}
+p.rodents <- ggplot()+
+  
+  # RRA data - GAM model with betar
+  geom_smooth(data = gam_preds, aes(x = meanFood.Services, y = meanRRA,
+                                    ymin = lwr_adj, ymax = upr_adj), stat = 'identity',
+              color="#1F6481", fill="#1F6481", alpha=0.5)+
+  geom_point(data=rodents.RRA, aes(x=meanFood.Services, y=meanRRA),
+             size=1.5, color="#044B69", alpha=0.8)+
+  geom_errorbar(data=rodents.RRA,
+                aes(x=meanFood.Services, y=meanRRA,
+                    ymin=meanRRA-se, ymax=meanRRA+se), 
+                width=1.6, color="#044B69", alpha=0.8)+
+
+  # FOO data - Quasibinomial GLM
+  geom_smooth(data=FOO_preds, aes(x = meanFood.Services, y = FOO,
+                                  ymin = lwr_adj, ymax = upr_adj), stat = 'identity',
+              color="#FAC5A6", fill="#FAC5A6", alpha=0.5)+ 
+  geom_errorbar(data=rodents.FOO,
+                aes(x=meanFood.Services, y=FOO,
+                    ymin=FOO-se, ymax=FOO+se), 
+                width=1.6, color="#ECA276", alpha=0.8)+
+  geom_point(data=rodents.FOO, aes(x=meanFood.Services, y=FOO),
+             size=1.5, color="#ECA276", alpha=0.8)+
+  
+# Graphics
+  labs(x = "Number of Food Services",
+       y = "Nuisance Rodents (FOO or RRA ± SE)") +
+  scale_y_continuous(limits=c(0,1),
+                     breaks=c(0, 0.25, 0.50, 0.75, 1),
+                     labels=c("0","25", "50", "75", "100"))+
+  scale_x_continuous(expand=c(0,0), limits=c(0,350))+
+  theme_custom()
+
+p.rodents
+```
+
+# Combine plots
+
+```{r}
+ggarrange(p.anthropogenic, p.rodents,
+          labels = c("(a)", "(b)"),
+          hjust=-2.8,
+          align="hv")
+```

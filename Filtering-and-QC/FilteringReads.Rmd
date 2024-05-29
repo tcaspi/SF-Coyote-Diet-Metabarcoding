@@ -15,7 +15,9 @@ library(janitor)
 
 # Read in ASV tables and remove sequences flagged for removal
 
-For batch 1, sequences comprising <0.001% of the total reads have already been removed. For batch 2, start by removing these. Then for both batches, drop sequences flagged for removal due to low percent identity or query cover.
+For both batches, sequences comprising <0.001% of the total reads have already been removed. 
+
+Drop sequences flagged for removal due to low percent identity or query cover.
 
 ```{r}
 # Batch 1
@@ -28,7 +30,6 @@ seqs1 <- seqs1 %>%
 seqs2 <- read.csv("Filtering-and-QC/batch2_reads.csv")
 seqs2 <- seqs2 %>% 
   filter(Flag != "x") %>% 
-  filter(Perc.Total >= 0.001) %>% # remove ASVs <0.001% of the total reads
   select(FinalName,"NTC1MB12":ncol(seqs2))
 ```
 
@@ -39,17 +40,19 @@ seqs1_count <- aggregate(. ~ FinalName, seqs1, sum)
 seqs2_count <- aggregate(. ~ FinalName, seqs2, sum)
 ```
 
-# Separate control from samples
+# Separate controls from samples
 
 ```{r}
 # Batch 1
-batch1_ctrls <- seqs1_count %>% select(-c("S20_3645":"S21_1194"))
-batch1_sams <- seqs1_count %>% select(1, "S20_3645":"S21_1194")
+batch1_ctrls <- seqs1_count %>% select(-starts_with("S"))
+batch1_sams <- seqs1_count %>% select(1, starts_with("S"))
 
 # Batch 1
-batch2_ctrls <- seqs2_count %>% select(-c("RS20_3767":"S22_1016"))
-batch2_sams <- seqs2_count %>% select(1, "RS20_3767":"S22_1016")
+batch2_ctrls <- seqs2_count %>% select(-c(starts_with("R"), starts_with("S")))
+batch2_sams <- seqs2_count %>% select(1, starts_with("R"), starts_with("S"))
 ```
+
+Controls data frames are used to determine filtering thresholds. In this study, we used our negative and positive controls to set a filtering threshold of 4,400 reads for batch 1 and 150 reads for batch 2. See supplementary material figure S2 in the manuscript for more information. 
 
 # Removing non-diet items from samples
 
@@ -227,10 +230,9 @@ func.FOO <- func.RRA %>% mutate_if(is.numeric, convert.to.FOO)
 # Final cleaning of diet data
 
 Generate final data set by:
-1.  Removing samples collected outside the study region of San Francisco
-2.  Removing any samples with a known non-coyote origin (e.g., Cytb, genotyping, or intentionally collected dog samples)
-5.  Removing samples that generated no *Canis* spp. reads
-6.  Removing duplicate samples (PCR replication)
+1.  Removing any samples with a known non-coyote origin (e.g., Cytb, genotyping, or intentionally collected dog samples)
+2.  Removing samples that generated no *Canis* spp. reads
+3.  Removing duplicate samples (PCR replication)
 
 The final data set will contain samples only from SF coyotes and have no duplicates introduced by technical repliation.
 
@@ -254,7 +256,6 @@ input <- list(func.RRA, func.FOO, sp.RRA, sp.FOO)
 
 # Define function to clean data
 clean.data <- function(x) {left_join(x, metadata, by = "SampleID") %>%
-    filter(Area == "Urban") %>%  # remove samples not in SF
     filter((Cytb_Sp != "dog" & Cytb_Sp != "raccoon") %>% replace_na(T)) %>%
     filter((Geno.Sp != "dog") %>% replace_na(T)) %>%
     filter(!SampleID %in% zero.read.scats) %>%  # remove no Canis samples 

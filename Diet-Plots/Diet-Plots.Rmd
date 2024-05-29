@@ -39,7 +39,7 @@ se.prop <- function(detections, total.scats) {
 convert.to.FOO <- function(x) ifelse(x >0, 1, 0)
 ```
 
-# Population-Level Diet
+# Figure 3: Population-Level Bar Plots
 
 ## Functional groups
 
@@ -248,3 +248,135 @@ ggarrange(p.func.pop, p.biol.season,
           label.y = c(1, 1),
           ncol = 2, align="h", widths=c(0.3, 0.7))
 ```
+
+# Figure 4: Territory-Level Donut Plots
+
+Prepare territory metadata:
+```{r}
+# Generate territory IDs from site data
+territories <- metadata %>% 
+  select(SampleID, Site) %>%  
+  mutate(Territory = case_when(
+    Site == "BERN" | Site == "STMA" ~ "Bernal",
+    Site == "GLEN" | Site == "LAGU" | Site == "TWIN" | Site == "MTDA" | Site == 
+      "GGHP" ~ "Glen",
+    Site == "SFGC" | Site == "OLYM" | Site == "LAKE" | Site == "FTFU" ~ "Merced",
+    Site == "BVP" | Site == "CHP" ~ "Corona",
+    Site == "TGPH" | Site == "HYDE" | Site == "FORT" ~ "Coit",
+    Site == "GGPE" ~ "GGP - East",
+    Site == "GGPW" | Site == "GGP" ~ "GGP - West",
+    Site == "LEND" | Site == "LAFY" ~ "Land's End",
+    Site == "MCLA" ~ "McLaren",
+    Site == "PRES" ~ "Presidio",
+    Site == "STFA" ~ "St. Francis",
+    Site == "SUNS" ~ "Sunset Res",
+    Site == "STGV" ~ "Stern Grove"))
+
+# Make character vector of sites to drop
+drop.sites <- c("Stern Grove", "Sunset Res")
+
+# Join diet data to territory data
+func.RRA.terr <- left_join(pivot.func.RRA, territories, by = "SampleID")
+```
+
+The code below generates the donut plots for each territory based on RRA. These rings can be cropped and overlayed on a map of SF to produce Figure 4 in the manuscript.
+```{r}
+# Make donut plots
+func.RRA.terr %>%
+  filter(!Territory %in% drop.sites) %>% 
+  group_by(Territory, Func.Group) %>%
+  summarize(meanRRA = 100*mean(RRA), .groups="drop") %>% 
+  ggplot(aes(x=2, y=meanRRA, fill=Func.Group)) +
+  geom_col()+
+  coord_polar(theta="y")+
+  facet_wrap(~Territory, nrow=3, ncol=4)+
+  scale_fill_brewer(palette = "Set2")+
+  xlim(c(0.2, 2.5))+
+  scale_y_continuous(breaks=NULL)+
+  theme(legend.title=element_blank())+
+  theme(axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        legend.text = element_text(size=10),
+        legend.key.size = unit(10, "pt"),
+        strip.background = element_blank(),
+        strip.text.x = element_text(size=10),
+        panel.background = element_rect(fill = "white"),
+        panel.grid = element_blank())+
+  ylab("Average RRA (%)")+ xlab(" ")+
+  labs(title = "RRA by Territory")
+```
+
+# Figure 6 - Individual-level bar plots organized into family groups
+
+Load data:
+```{r}
+# Load diet data
+func.RRA <- read.csv("Filtering-and-QC/func.RRA.clean.csv") %>% select(-c(X))
+
+# Load metadata
+metadata <- read.csv("Filtering-and-QC/All_Metadata.csv")
+
+# Load individual family group assignments
+ids <- read.csv("Diet-Plots/IDs.csv")
+```
+
+Merge the diet data to the metadata and filter out any scats that aren't assigned to an individual:
+```{r}
+# Merge diet data with metadata and keep only genotyped samples
+func.RRA.ind <- left_join(func.RRA, metadata, by = "SampleID") %>% 
+  filter(Category == "SFCoy")
+
+# Create list of individuals to keep with >=8 or more scats
+individuals <- func.RRA.ind %>% 
+  group_by(Individual) %>% 
+  tally() %>% 
+  filter(n>=8)
+
+coys.to.keep <- pull(individuals, Individual)
+
+# Drop coyotes fewer than 8 scats and remove metadata
+func.RRA.ind.filt <- func.RRA.ind %>% 
+  filter(Individual %in% coys.to.keep) %>% 
+  select(1:7, Individual)
+```
+
+Pivot data to longer format and calculate average RRA per individual:
+```{r}
+# Pivoting functional group data frames to longer format
+pivot.func.RRA <- func.RRA.ind.filt %>% 
+   pivot_longer(cols=c("Bird", "Small.Mammal", "Medium.Mammal", "Anthropogenic", "Herpetofauna", "Marine.Aquatic"), 
+               names_to="Func.Group", values_to = "RRA")
+
+# Calculate average RRA
+func.RRA.ids <- pivot.func.RRA %>% 
+  group_by(Individual, Func.Group) %>% 
+  summarize(meanRRA = 100*mean(RRA), 
+            se = 100*std.error(RRA), .groups="drop") %>% 
+  left_join(ids, by = "Individual") 
+```
+
+Make plot:
+```{r}
+# Set names
+names <- c("Anthropogenic", "Birds", "Herptiles", "Marine Mammals", "Medium-Sized Mammals", "Small Mammals")
+
+# RRA
+func.RRA.ids %>%
+  ggplot(aes(x=reorder(Individual, Family.Group), y=meanRRA, fill=Func.Group)) +
+  geom_col()+
+  scale_y_continuous(expand = c(0,0))+
+  facet_grid(~Family.Group, scales = "free", space = "free",
+             labeller = labeller(Family.Group = label_wrap_gen(width = 1)))+
+  scale_fill_brewer(palette = "Set2",
+                    labels=names) +
+  ylab("Diet Functional Group (RRA)") + xlab(NULL)+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1.15, hjust=1, size=8),
+        axis.ticks.x = element_blank(),
+        strip.text.x = element_text(size = 5, angle = 0, hjust=0.5, vjust=.5),
+        strip.background.x = element_blank(),
+        legend.title=element_blank(),
+        legend.text = element_text(size = 8),  # Adjust the size of the legend text
+        legend.key.size = unit(0.5, "cm"))
+```
+
