@@ -1,0 +1,183 @@
+---
+title: "DADA2.Rmd"
+author: " "
+date: "2024-05-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Package installation
+
+Install DADA2 (if necessary):
+```{r}
+#source("https://bioconductor.org/biocLite.R")
+#biocLite("dada2")
+
+library(dada2)
+```
+
+Note - the code below should be run on each batch separately.
+
+# Set-up
+
+```{r}
+# Create "samples" object
+samples <- scan("samples", what="character")
+
+# Create objects holding the file names of all the forward and reverse reads
+forward_reads <- sort(list.files(pattern="_R1_ca.fastq")) # change based on file names
+reverse_reads <- sort(list.files(pattern="_R2_ca.fastq"))
+
+# Create variables holding file names for the forward and reverse filtered reads we're going to generate with the next function. 
+filtered_forward_reads <- paste0(samples, "_12S_R1_dfilt.fastq")
+filtered_reverse_reads <- paste0(samples, "_12S_R2_dfilt.fastq")
+```
+
+# Filtering
+
+Use the filterAndTrim step to isolate 12S reads and filter out low quality reads.
+
+```{r}
+# Batch 1 (Novogene Corporation)
+filtered_out <- filterAndTrim(forward_reads, filtered_forward_reads, reverse_reads, filtered_reverse_reads, matchIDs = TRUE, maxEE=c(2,2), rm.phix=TRUE, multithread=TRUE, minLen=80, maxLen=110)
+
+names(filtered_forward_reads) <- samples
+names(filtered_reverse_reads) <- samples
+
+# Batch 2 (Admera Health)
+filtered_out <- filterAndTrim(forward_reads, filtered_forward_reads, maxEE=Inf, rm.phix=TRUE, multithread=TRUE, minLen=78, maxLen=115)
+```
+
+Some samples have zero reads pass this filter step (e.g., negative controls, failed amplifications) and therefore no dfilt files are created for them. These samples need to be removed from several places before running the learn errors command and subsequent steps or the code will not run.
+
+To do this: (1) create a new samples object that does not include these samples and (2) recreate the filtered_forward_reads and filtered_reverse_reads objects using the updated smaller sample list.
+
+```{r}
+# Turn filtered_out object into a data frame
+df_filt <- as.data.frame(filtered_out)
+
+# Extract samples for which the reads were greater than zero
+df_filt_above0 <- df_filt[df_filt$reads.out>0,]
+
+# Extract row names from this filtered list of sample names
+df_filt_above0$samplenames <- row.names(df_filt_above0)
+
+# Create a character vector of sample names
+df_filt_names <- read.table(text = as.character(df_filt_above0$samplenames), sep="_", stringsAsFactors=FALSE)
+
+new.names <- df_filt_names[,"V1"]
+
+# Write to text file
+write(new.names, "updated.names.txt") # remove .txt extension from file name
+
+# Create a new sample object using the updated text
+samples <- scan("updated.names", what="character")
+
+# Recreate the filtered forward and filtered reverse reads objects
+filtered_forward_reads <- paste0(samples, "_12S_R1_dfilt.fastq")
+filtered_reverse_reads <- paste0(samples, "_12S_R2_dfilt.fastq")
+
+names(filtered_forward_reads) <- samples
+names(filtered_reverse_reads) <- samples
+```
+
+# Learn errors
+
+```{r}
+# Learn forward error rates
+errF <- learnErrors(filtered_forward_reads, multithread=TRUE, MAX_CONSIST = 10)
+
+# Learn reverse error rates
+errR <- learnErrors(filtered_reverse_reads, multithread=TRUE, MAX_CONSIST = 10)
+
+# Plot the errors and save to file
+jpeg("errF.jpg")
+plotErrors(errF, nominalQ=TRUE)
+dev.off()
+
+jpeg("errR.jpg")
+plotErrors(errR, nominalQ=TRUE)
+dev.off()
+```
+
+# Sample inference and removal of chimeras
+
+```{r}
+## Batch 1 (Novogene Corporation)
+mergers <- vector("list", length(samples))
+names(mergers) <- samples
+for(sam in samples) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(filtered_forward_reads[[sam]])
+    ddF <- dada(derepF, err=errF, multithread=TRUE)
+    derepR <- derepFastq(filtered_reverse_reads[[sam]])
+    ddR <- dada(derepR, err=errR, multithread=TRUE)
+    merger <- mergePairs(ddF, derepF, ddR, derepR, trimOverhang = TRUE)
+    mergers[[sam]] <- merger
+}
+rm(derepF); rm(derepR) 
+
+# Construct sequence table
+seqtab <- makeSequenceTable(mergers)
+dim(seqtab) # Investigate dimensions of the sequence table
+table(nchar(getSequences(seqtab)))
+
+# Plot distribution of sequence lengths
+jpeg("seqlengths.jpg")
+hist(nchar(getSequences(seqtab)), main="Distribution of sequence lengths")
+dev.off()
+
+# Remove chimeras
+seqtab.nochim <- removeBimeraDenovo(seqtab, multithread=T, verbose=T)
+dim(seqtab.nochim) # Investigate number of retained sequences after removing chimeras
+sum(seqtab.nochim)/sum(seqtab) # Calculate percent of sequences retained
+
+
+## Batch 2 (Admera Health)
+derepF <- derepFastq(filtered_forward_reads)
+names(derepF) <- samples
+ddF <- dada(derepF, err=errF, multithread=TRUE)
+ddF[[1]]
+head(getSequences(ddF[[1]]))
+
+# Construct sequence table
+seqtab <- makeSequenceTable(ddF)
+dim(seqtab) # Investigate dimensions of the sequence table
+table(nchar(getSequences(seqtab)))
+
+# Plot distribution of sequence lengths
+jpeg("seqlengths.jpg")
+hist(nchar(getSequences(seqtab)), main="Distribution of sequence lengths")
+dev.off()
+
+# Remove chimeras
+seqtab.nochim <- removeBimeraDenovo(seqtab, multithread=T, verbose=T)
+dim(seqtab.nochim) # Investigate number of retained sequences after removing chimeras
+sum(seqtab.nochim)/sum(seqtab) # Calculate percent of sequences retained
+```
+
+# Make ASV table
+
+```{r}
+# Give sequence headers manageable names (ASV_1, ASV_2...)
+asv_seqs <- colnames(seqtab.nochim)
+asv_headers <- vector(dim(seqtab.nochim)[2], mode="character")
+
+for (i in 1:dim(seqtab.nochim)[2]) {
+  asv_headers[i] <- paste(">ASV", i, sep="_")
+}
+
+# Make fasta of final ASV sequences for BLAST+
+asv_fasta <- c(rbind(asv_headers, asv_seqs))
+write(asv_fasta, "ASVs.fa")
+
+# Make ASV count table
+asv_tab <- t(seqtab.nochim)
+row.names(asv_tab) <- sub(">", "", asv_headers)
+write.table(asv_tab, "ASVs_counts.txt", sep="\t", quote=F)
+```
+
+Use the ASVs_counts.txt tables for taxonomy assignment in BLAST+. After assigning taxonomy for each batch, these files must be further filtered prior to diet analyses. See Filtering-and-QC folder for next steps.

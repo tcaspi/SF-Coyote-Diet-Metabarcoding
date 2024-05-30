@@ -1,0 +1,146 @@
+---
+title: "Trimming"
+author: " "
+date: "2024-05-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The code below is used to investigate and filter for sequence quality and trim off primers and adapters. Note that running this part of the bioinformatic pipeline requires high performance computing. Before starting, ensure the fastq files are downloaded and saved into a new directory. Navigate to the directory in which the raw fastq files are saved. These steps should be implemented for each batch separately.
+
+## Step 1: FastQC and MultiQC
+
+Run FastQC and MultiQC to do some quality control. These commands will provide basic stats about your sequencing lane. FastQC runs on indivdiual fastq files, and MultiQC sums them up into a nice output.
+
+Make a directory for fastqc output files and run fastqc on all fastq files in the appropriate directory you just made.
+
+```{sh}
+# Make directory
+mkdir fastqc_out/
+  
+# Take all fastq files, run FastQC on them, and then place them in the out directory
+fastqc *.fastq.gz --outdir=fastqc_out/
+```
+
+Next run multiqc on the outputs from fastqc. MultiQC needs to be run from Sophie’s directory, so use “/home/sophie/.local/bin/multiqc” as executable. Modify as necessary depending on the computer used to perform MultiQC.
+
+```{sh}
+# Navigate to the output folder
+cd fastqc_out/
+
+# Run MultiQC on all fastq files in the folder
+/home/sophie/.local/bin/multiqc *_fastqc.zip
+```
+
+MultiQC automatically creates an output called multiqc_report.html and individual tab-delimited files in a directory called multiqc_data/. This directory will be inside the fastqc_out directory.
+
+Open and investigate the multiqc_report.html using an internet browser. 
+
+## Step 2: Trimming adapters and primers with cutadapt
+
+Move back out of the fastqc directory and make a new directory for cutadapt files and subdirectory for cutadapt reports.
+
+```{sh}
+cd ../
+
+mkdir trimmed_ca
+
+mkdir trimmed_ca/ca_reports
+```
+
+For more information on cutadapt commands see: https://cutadapt.readthedocs.io/en/stable/guide.html
+
+-g = 5’ trim, cuts any part of the sequence (ADAPTER, DAPTER, TER, etc.) and anything before it
+-a = 3' trim, cuts any part of the sequence (ADAPTER, ADAPXER, etc.) and everything after it
+-n = how many rounds of search and removing of adapters to do
+-m = minimum sequence length
+-M = maximum sequence length
+-q = minimum quality score
+
+To trim the primers and overhang from R1, first trim the primers, then pipe and trim the overhang and set the minimum thresholds. The code has been modified to fit the fastq file names returned by different sequencing companies.
+
+```{sh}
+# Batch 1 (sequenced by Novogene Corporation)
+for file in $(ls *_1.fq.gz)
+do cutadapt -g GGGCAATCCTGAGCCAA -g TTAGATACCCCACTATGC -g TTAGATACCCCACTATGT -a GATAGGTGCAGAGACTCAATGG -a CTAGAGGAGCCTGTTCCG -a CTAGAGGAGCCTGTTCTG -a CTAGAGGAGCCTGTTCCA -a CTAGAGGAGCCTGTTCTA -n 4 $file | cutadapt -a GATCGGAAGAGC -m 5 -M 110 -q 30 - > trimmed_ca/${file%.*fq.gz}_ca.fastq 2> trimmed_ca/ca_reports/${file%.*fq.gz}_report.txt
+done
+
+cd trimmed_ca/ca_reports
+
+cat *.txt > _reportR1.txt
+
+cd ../..
+
+# Batch 2 (sequenced by Admera Health)
+for file in $(ls *_R1.fastq.gz)
+do cutadapt -g GGGCAATCCTGAGCCAA -g TTAGATACCCCACTATGC -g TTAGATACCCCACTATGT -a GATAGGTGCAGAGACTCAATGG -a CTAGAGGAGCCTGTTCCG -a CTAGAGGAGCCTGTTCTG -a CTAGAGGAGCCTGTTCCA -a CTAGAGGAGCCTGTTCTA -n 4 $file | cutadapt -a GATCGGAAGAGC -m 5 -M 110 -q 30 - > trimmed_ca/${file%.*fastq.gz}_ca.fastq 2> trimmed_ca/ca_reports/${file%.*fastq.gz}_report.txt
+done
+
+cd trimmed_ca/ca_reports
+
+cat *.txt > _reportR1.txt
+
+cd ../..
+```
+
+To trim the primers and overhang from R2:
+
+```{sh}
+# Batch 1 (sequenced by Novogene Corporation)
+for file in $(ls *_2.fq.gz)
+do cutadapt -g CCATTGAGTCTCTGCACCTATC -g CGGAACAGGCTCCTCTAG -g CAGAACAGGCTCCTCTAG -g TGGAACAGGCTCCTCTAG -g TAGAACAGGCTCCTCTAG -a TTGGCTCAGGATTGCCC -a GCATAGTGGGGTATCTAA -a ACATAGTGGGGTATCTAA -n 4 $file | cutadapt -a GATCGGAAGAGC -m 5 -M 110 -q 30 - > trimmed_ca/${file%.*fq.gz}_ca.fastq 2> trimmed_ca/ca_reports/${file%.*fq.gz}_report.txt
+done
+
+cd trimmed_ca/ca_reports
+
+cat *.txt > _reportR2.txt
+
+cd ..
+
+# Batch 2 (sequenced by Admera Health)
+for file in $(ls *_R2.fastq.gz)
+do cutadapt -g CCATTGAGTCTCTGCACCTATC -g CGGAACAGGCTCCTCTAG -g CAGAACAGGCTCCTCTAG -g TGGAACAGGCTCCTCTAG -g TAGAACAGGCTCCTCTAG -a TTGGCTCAGGATTGCCC -a GCATAGTGGGGTATCTAA -a ACATAGTGGGGTATCTAA -n 4 $file | cutadapt -a GATCGGAAGAGC -m 5 -M 110 -q 30 - > trimmed_ca/${file%.*fastq.gz}_ca.fastq 2> trimmed_ca/ca_reports/${file%.*fastq.gz}_report.txt
+done
+
+cd trimmed_ca/ca_reports
+
+cat *.txt > _reportR2.txt
+
+cd ..
+```
+
+## Step 3: Check trimming success
+
+Repeat the same steps as before, this time on the trimmed files:
+
+```{sh}
+# Make directory INSIDE of the trimmed_ca folder
+mkdir fastqc_out/
+
+# Take all fastq files, run FastQC on them, and then place them in the out directory
+fastqc *.fastq --outdir=fastqc_out/ 
+
+cd fastqc_out/ #navigate to the output folder you just made
+
+# Run MultiQC on all fastq files in the folder
+/home/sophie/.local/bin/multiqc *_fastqc.zip
+
+cd ..
+```
+
+Once again, open multiqc_report.html in an internet browser. Investigate sequence qualities and ensure there is no adapter content remaining. Check sequence lengths: 12S amplicons should be be around 100 bp.
+
+# Step 4: Make a list of sample names for DADA2
+
+-f defines the fields to extract and is followed by numbers representing columns. Edit code as necessary to get a clean sample list. If needed, edit the sample names first, then change how many columns to remove to get a clean list of sample names.
+
+```{sh}
+# Make sample list
+ls *_R1_ca.fastq | cut -f 1 -d "_" > samples
+
+# Confirm that all sample names are present
+less samples
+```
