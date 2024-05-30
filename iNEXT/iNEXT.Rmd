@@ -13,6 +13,14 @@ library(tidyverse)
 library(pals)
 ```
 
+# Approach
+
+We calculated and compared sample coverage, species richness, Hill-Shannon diversity, and Hill-Simpson diversity for territories and individuals on the basis of sample incidence data with the R package iNEXT. Sample coverage is the proportion of individuals (or in this case diet items) in an assemblage that belong to species represented in the sample. The three metrics of diversity differ in how they scale rarity: species richness is the most sensitive and Hill-Simpson the least sensitive to rare species. 
+
+We calculated dietary rarefaction curves with iNEXT to determine if samples within territories and individuals reached a species diversity asymptote, indicating sample sizes large enough for comparison. We were unable to obtain an equal number of scat samples per individual. Therefore, we limited our individual-level analyses to the coyotes that were sampled the most frequently and with high estimated coverage, indicating that most of their diet items were represented in their samples (≥8 scats; code below). 
+
+We used genetic data and local observations to assign frequently samples individuals to family groups. If the majority of an individual’s scats were collected in one territory over the course of the study or the individual was observed repeatedly in a territory, we felt confident in assigning the individual to the family group associated with that territory. One frequently sampled individual was designated as transient given inconsistency in where his fecal samples were collected.
+
 # Prepare and format data
 
 Following the format for the incidence_raw data structure for the iNEXT package.
