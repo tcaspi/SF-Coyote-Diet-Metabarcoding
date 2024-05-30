@@ -1,0 +1,453 @@
+---
+title: "nMDS"
+author: " "
+date: "2024-05-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(vegan)
+library(patchwork)
+```
+
+# Approach
+
+We constructed Bray-Curtis (for RRA) and Jaccard (for FOO) dissimilarity matrices comparing each pair of fecal samples and ordinated the values with non-metric multidimensional scaling (nMDS) to visualize dietary differences among biological seasons, territories, and individuals using the vegan package in R. We selected the minimum number of dimensions (k = 3) in which stress of the ordination was ≤ 0.1.
+
+# Biological seasons and territories
+
+## Data preparation
+
+```{r}
+# Load diet data
+sp.RRA <- read.csv("Filtering-and-QC/sp.RRA.clean.csv") %>% select(-c(X))
+sp.FOO <- read.csv("Filtering-and-QC/sp.FOO.clean.csv") %>% select(-c(X))
+
+# Load metadata
+metadata <- read.csv("Filtering-and-QC/All_Metadata.csv")
+
+# Prepare sample_lookup containing only information pertaining to samples included in diet analyses
+sample_lookup <- left_join(sp.RRA, metadata, by = "SampleID") %>% 
+  
+  # Define seasons
+  mutate(Biol.Season = case_when(
+    Month == 3 | Month == 4 | Month == 5 | Month == 6 ~ "Pupping",
+    Month == 7 | Month == 8 | Month == 9 | Month == 10 ~ "Dispersal",
+    Month == 11 | Month == 12 | Month == 1 | Month == 2 ~ "Mating"
+  )) %>% 
+  
+  # Define territories
+  mutate(Territory = case_when(
+    Site == "BERN" | Site == "STMA" ~ "Bernal",
+    Site == "GLEN" | Site == "LAGU" | Site == "TWIN" | Site == "MTDA" | Site == "GGHP" ~ "Glen",
+    Site == "SFGC" | Site == "OLYM" | Site == "LAKE" | Site == "FTFU" ~ "Merced",
+    Site == "BVP" | Site == "CHP" ~ "Corona",
+    Site == "TGPH" | Site == "HYDE" | Site == "FORT" ~ "Coit",
+    Site == "GGPE" ~ "GGP - East",
+    Site == "GGPW" | Site == "GGP" ~ "GGP - West",
+    Site == "LEND" | Site == "LAFY" ~ "Land's End",
+    Site == "MCLA" ~ "McLaren",
+    Site == "PRES" ~ "Presidio",
+    Site == "STFA" ~ "St. Francis",
+    Site == "SUNS" ~ "Sunset Res",
+    Site == "STGV" ~ "Stern Grove")) %>% 
+  
+  # Keep only relevant samples
+  select(SampleID, Biol.Season, Territory, Individual, Genotype)
+```
+
+Remove seven outlier samples that prevent ordination from running: S22_0899, S21_0075, S21_0161, S20_3776, S21_1098, S21_0178, and S21_0023. Then, turn data frame into matrix.
+
+```{r}
+# Add rownames
+rownames(sp.RRA) <- sp.RRA$SampleID
+rownames(sp.FOO) <- sp.FOO$SampleID
+
+# Define samples to drop
+outliers <- c("S22_0899", "S21_0075", "S21_0161", "S20_3776", "S21_1098", "S21_0178", "S21_0023")
+
+# Remove outliers and SampleID column and save as matrix
+sp.RRA <- sp.RRA %>% 
+  filter(!SampleID %in% outliers) %>% 
+  select(-c(SampleID)) %>% 
+  as.matrix()
+
+sp.FOO <- sp.FOO %>% 
+  filter(!SampleID %in% outliers) %>% 
+  select(-c(SampleID)) %>% 
+  as.matrix()
+```
+
+## Calculate dissimilarity matrices
+
+```{r}
+# Calculate dissimilarity
+dist.sp.RRA <- vegdist(sp.RRA, method="bray")
+dist.sp.FOO <- vegdist(sp.FOO, method="jaccard")
+
+# Convert to matrix
+dist.sp.RRA <- as.matrix(dist.sp.RRA, labels = T)
+dist.sp.FOO <- as.matrix(dist.sp.FOO, labels = T)
+```
+
+## Run nMDS
+
+Different features of the metaMDS command:
+
+-   k = Number of dimensions.
+-   trymax = How many NMDS runs should be performed in order to find a convergent solution (number of random starts). \*maxit = Indicates the maximum number of iterations each NMDS run can have in search of the lowest stress configuration.
+
+Note, the metaMDS command takes a long time to run.
+
+```{r}
+set.seed(1)
+
+# Run nMDS
+nmds.sp.RRA <- metaMDS(dist.sp.RRA, k=3, autotransform = F, noshare = T, maxit = 999, trymax = 500, distance = "bray")
+
+nmds.sp.FOO <- metaMDS(dist.sp.FOO, k=3, autotransform = F, noshare=T, maxit=999, trymax=500, distance="jaccard")
+
+# Calculate stress score
+nmds.sp.RRA$stress
+nmds.sp.FOO$stress
+
+# Produces Shepard's diagram to ensure that dissimilarities are well preserved in the reduced number of dimensions
+stressplot(nmds.sp.RRA)
+stressplot(nmds.sp.FOO)
+```
+
+Model output generated during data analysis was saved because running the metaMDS command takes a long time. These are saved as sp.RRA.rds and sp.FOO.rds. To save time, this model output can be loaded as follows:
+
+```{r}
+# Load metaMDS output
+nmds.sp.RRA <- readRDS("nMDS/sp.RRA.rds")
+nmds.sp.FOO <- readRDS("nMDS/sp.FOO.rds")
+```
+
+## Plot territory and season ordinations
+
+Load data:
+
+```{r}
+# Load covariate data
+covariates <- read.csv("Regression-Analyses/Territory_All_Covariates.csv")
+
+# Load individual family group assignments
+ids <- read.csv("Diet-Plots/IDs.csv")
+```
+
+Prep diet data for plotting:
+
+```{r}
+# Extract point positions
+data.points.RRA <- as.data.frame(scores(nmds.sp.RRA))
+data.points.FOO <- as.data.frame(scores(nmds.sp.FOO))
+
+# Select low sample size territories to drop
+sites.to.drop <- c("Stern Grove", "Sunset Res")
+
+# Making plotting data frame with metadata associated
+sp.RRA.plot <- data.points.RRA %>% 
+  rownames_to_column(var = "SampleID") %>% 
+  left_join(sample_lookup,by = "SampleID") %>% 
+  left_join(covariates, by="Territory") %>% 
+  filter(!Territory %in% sites.to.drop)
+
+sp.FOO.plot <- data.points.FOO %>% 
+  rownames_to_column(var = "SampleID") %>% 
+  left_join(sample_lookup, by = "SampleID") %>% 
+  left_join(covariates, by="Territory") %>% 
+  filter(!Territory %in% sites.to.drop)
+
+# Calculate group centroids for territories and seasons based on medians
+centroid.sp.RRA <- sp.RRA.plot %>%
+  group_by(Territory) %>% 
+  mutate(centroid1 = median(NMDS1),
+         centroid2 = median(NMDS2),
+         centroid3 = median(NMDS3)) %>% 
+  ungroup %>% 
+  group_by(Biol.Season) %>% 
+  mutate(centroid.season1 = median(NMDS1),
+         centroid.season2 = median(NMDS2),
+         centroid.season3 = median(NMDS3))
+
+centroid.sp.FOO <- sp.FOO.plot %>% 
+  group_by(Territory) %>% 
+  mutate(centroid1 = median(NMDS1),
+         centroid2 = median(NMDS2),
+         centroid3 = median(NMDS3)) %>% 
+  ungroup %>% 
+  group_by(Biol.Season) %>% 
+  mutate(centroid.season1 = median(NMDS1),
+         centroid.season2 = median(NMDS2),
+         centroid.season3 = median(NMDS3))
+```
+
+Make plots:
+
+```{r}
+# Define colors
+colors <- c("#8DD3C7FF", "#FDDF11", "#BEBADAFF", "#FB8072FF", "#80B1D3FF", "#FDB462FF", "#B3DE69FF", "#FCCDE5FF", "#D9D9D9FF", "#BC80BDFF", "#CCEBC5FF", "black")
+
+family_colors <- c("Bernal" = colors[1],
+                   "Coit" = colors[2],
+                   "Corona" = colors[3],
+                   "GGP - East" = colors[4],
+                   "GGP - West" = colors[5],
+                   "Glen" = colors[6],
+                   "Land's End" = colors[7],
+                   "McLaren" = colors[8],
+                   "Merced" = colors[9],
+                   "Presidio" = colors[10],
+                   "St. Francis" = colors[11],
+                   "Transient" = colors[12])
+
+## RRA
+
+# Biological season plot
+p.RRA.season <- sp.RRA.plot %>% 
+  ggplot(aes(x=NMDS1, y=NMDS2, color=Biol.Season, fill=Biol.Season))+
+  stat_ellipse(level=0.95, size=1, show.legend = FALSE)+
+  geom_point(size=1.5, alpha=0.5, show.legend = FALSE)+
+  geom_point(data=centroid.sp.RRA,
+             mapping=aes(x=centroid.season1, y=centroid.season2),
+                        color="black", shape=21, size=2, alpha=0.6,
+                        show.legend=FALSE)+
+  scale_color_manual(values=c("#66C2A5","#FC8D62","#8DA0CB"))+
+  scale_fill_manual(values=c("#66C2A5", "#FC8D62", "#8DA0CB"))+
+  theme_classic()+
+  theme(plot.margin = margin(, 0.5, , , "cm"))+
+  scale_x_continuous(breaks = c(-0.25, 0, 0.25),
+                     labels = c("-0.25", "0", "0.25"))+
+  scale_y_continuous(breaks = c(-0.25, 0, 0.25),
+                     labels = c("-0.25", "0", "0.25"))+
+  ggtitle("RRA")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+# Territory plot
+set.seed(1)
+p.RRA.territory <- sp.RRA.plot %>% 
+  ggplot(aes(x=NMDS1, y=NMDS2, color=Territory, fill=Territory))+
+  stat_ellipse(level=.95, linewidth=1, show.legend = FALSE)+
+  geom_point(size=1.5, alpha=0.5, show.legend = FALSE)+
+  geom_jitter(data=centroid.sp.RRA,
+             mapping=aes(x=centroid1, y=centroid2),
+                        color="black", shape=21, size=2, alpha=0.6,
+                        show.legend=FALSE, stat="unique", height=0.01)+
+  scale_color_manual(values=family_colors)+
+  scale_fill_manual(values=family_colors)+
+  theme_classic()+
+  theme(plot.margin = margin(, 0.5, , , "cm"))+
+  scale_x_continuous(breaks = c(-0.25, 0, 0.25),
+                     labels = c("-0.25", "0", "0.25"))+
+  scale_y_continuous(breaks = c(-0.25, 0, 0.25),
+                     labels = c("-0.25", "0", "0.25"))
+
+## FOO
+
+# Biological season plot
+p.FOO.season <- sp.FOO.plot %>% 
+  ggplot(aes(x=NMDS1, y=NMDS2, color=Biol.Season, fill=Biol.Season))+
+  stat_ellipse(level=0.95, size=1, show.legend = FALSE)+
+  geom_point(size=1.5, alpha=0.5, show.legend = FALSE)+
+  geom_point(data=centroid.sp.FOO,
+             mapping=aes(x=centroid.season1, y=centroid.season2),
+                        color="black", shape=21, size=2, alpha=0.1, 
+                        show.legend=FALSE)+
+  scale_color_manual(values=c("#66C2A5","#FC8D62","#8DA0CB"))+
+  scale_fill_manual(values=c("#66C2A5", "#FC8D62", "#8DA0CB"))+
+  theme_classic()+
+  theme(plot.margin = margin(, 0.5, , , "cm"))+
+  scale_x_continuous(breaks = c(-0.25, 0, 0.25, 0.5),
+                     labels = c("-0.25", "0", "0.25", "0.50"))+
+  ggtitle("FOO")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+# Territory plot
+set.seed(1)
+p.FOO.territory <- sp.FOO.plot %>% 
+  ggplot(aes(x=NMDS1, y=NMDS2, color=Territory, fill=Territory))+
+  stat_ellipse(level=0.95, linewidth=1, show.legend = FALSE)+
+  geom_point(size=1.5, alpha=0.5, show.legend = FALSE)+
+  geom_jitter(data=centroid.sp.FOO,
+             mapping=aes(x=centroid1, y=centroid2),
+                         color="black", shape=21, size=2,alpha=0.6, 
+                        show.legend=FALSE, stat="unique", height=0.01)+
+  scale_color_manual(values=family_colors)+
+  scale_fill_manual(values=family_colors)+
+  theme_classic()+
+  theme(plot.margin = margin(, 0.5, , , "cm"))+
+  scale_x_continuous(breaks = c(-0.25, 0, 0.25, 0.5),
+                     labels = c("-0.25", "0", "0.25", "0.50"))
+```
+
+# Individuals
+
+Pull out frequently samples individuals with eight or more scats and re-run metaMDS on individual-level data.
+
+## Data preparation
+
+```{r}
+# Create vector of coyotes with 8 or more scats
+individuals <- read.csv("Filtering-and-QC/sp.RRA.clean.csv") %>% select(-c(X)) %>% 
+  left_join(metadata, by="SampleID") %>% 
+  filter(Genotype=="Success") %>% 
+  group_by(Individual) %>% 
+  tally() %>% 
+  filter(n>=8)
+  
+coys.to.keep <- as.vector(individuals$Individual)
+
+# Load diet data and retain diet data only for individuals with 8 or more scats
+sp.RRA.ind <- read.csv("Filtering-and-QC/sp.RRA.clean.csv") %>% select(-c(X)) %>% 
+  left_join(metadata, by="SampleID") %>% 
+  filter(Individual %in% coys.to.keep) %>% 
+  select(SampleID:Zalophus.californianus)
+
+sp.FOO.ind <- read.csv("Filtering-and-QC/sp.FOO.clean.csv") %>% select(-c(X)) %>% 
+  left_join(metadata, by="SampleID") %>% 
+  filter(Individual %in% coys.to.keep) %>% 
+  select(SampleID:Zalophus.californianus)
+```
+
+Remove two outlier samples that prevent ordination from running: S22_0899 and S21_0023. Then, turn data frame into matrix.
+
+```{r}
+# # Add rownames
+rownames(sp.RRA.ind) <- sp.RRA.ind$SampleID
+rownames(sp.FOO.ind) <- sp.FOO.ind$SampleID
+
+# Remove outliers and SampleID column and save as matrix
+sp.RRA.ind <- sp.RRA.ind %>% 
+  filter(SampleID != "S22_0899" & SampleID != "S21_0023") %>% 
+  select(-c(SampleID)) %>% 
+  as.matrix()
+
+sp.FOO.ind <- sp.FOO.ind %>% 
+  filter(SampleID != "S22_0899" & SampleID != "S21_0023") %>% 
+  select(-c(SampleID)) %>% 
+  as.matrix()
+```
+
+## Calculate dissimilarity
+
+```{r}
+# Calculate dissimilarity
+dist.sp.RRA.ind <- vegdist(sp.RRA.ind, method="bray")
+dist.sp.FOO.ind <- vegdist(sp.FOO.ind, method="jaccard")
+
+# Convert to matrix
+dist.sp.RRA.ind <- as.matrix(dist.sp.RRA.ind, labels = T)
+dist.sp.FOO.ind <- as.matrix(dist.sp.FOO.ind, labels = T)
+```
+
+## Run nMDS
+
+```{r}
+set.seed(1)
+
+# Run MDS
+nmds.sp.RRA.ind <- metaMDS(dist.sp.RRA.ind, k=3, autotransform = F, noshare = T, maxit = 999, trymax = 250, distance = "bray")
+
+nmds.sp.FOO.ind <- metaMDS(dist.sp.FOO.ind, k=3, autotransform = F, noshare = T, maxit = 999, trymax = 250, distance = "bray")
+
+# Calculate stress score
+nmds.sp.RRA.ind$stress
+nmds.sp.FOO.ind$stress
+
+# Produce Shepard's diagram to ensure that dissimilarities are well preserved in the reduced number of dimensions
+stressplot(nmds.sp.RRA.ind)
+stressplot(nmds.sp.FOO.ind)
+```
+
+Model output generated during data analysis was saved because running the metaMDS command takes a long time. These are saved as sp.RRA.ind.rds and sp.FOO.ind.rds. To save time, this model output can be loaded as follows:
+
+```{r}
+# Load metaMDS output
+nmds.sp.RRA.ind <- readRDS("nMDS/sp.RRA.ind.rds")
+nmds.sp.FOO.ind <- readRDS("nMDS/sp.FOO.ind.rds")
+```
+
+## Plot individual ordinations
+
+Prep diet data for plotting:
+
+```{r}
+# Extract point positions
+data.points.RRA.ind <- as.data.frame(scores(nmds.sp.RRA.ind))
+data.points.FOO.ind <- as.data.frame(scores(nmds.sp.FOO.ind))
+
+# Making plotting data frame with metadata associated
+sp.RRA.ind.plot <- data.points.RRA.ind %>% 
+  rownames_to_column(var = "SampleID") %>% 
+  left_join(sample_lookup,by = "SampleID") %>% 
+  left_join(ids, by="Individual") %>% 
+  mutate_at("Individual", as.factor)
+
+sp.FOO.ind.plot <- data.points.FOO.ind %>% 
+  rownames_to_column(var = "SampleID") %>% 
+  left_join(sample_lookup,by = "SampleID") %>% 
+  left_join(ids, by="Individual") %>% 
+  mutate_at("Individual", as.factor)
+
+# Calculate group centroids for individuals based on medians
+centroid.sp.RRA.ind <- sp.RRA.ind.plot %>%
+  group_by(Individual) %>% 
+  mutate(centroid1 = median(NMDS1),
+         centroid2 = median(NMDS2),
+         centroid3 = median(NMDS3))
+
+centroid.sp.FOO.ind <- sp.FOO.ind.plot %>%
+  group_by(Individual) %>% 
+  mutate(centroid1 = median(NMDS1),
+         centroid2 = median(NMDS2),
+         centroid3 = median(NMDS3))
+```
+
+Make plots:
+
+```{r}
+# RRA
+set.seed(1)
+p.RRA.ind <- sp.RRA.ind.plot %>% 
+  ggplot(aes(x=NMDS1, y=NMDS2, color=Family.Group, fill=Family.Group))+
+  geom_point(size=1.5, alpha=0.5, show.legend = FALSE)+
+  geom_jitter(data=centroid.sp.RRA.ind,
+             mapping=aes(x=centroid1, y=centroid2),
+                         color="black", shape=21, 
+                        size=2, alpha=0.7, width=0.01, height=0.01, stat="unique",
+             show.legend = FALSE)+
+  scale_color_manual(values=family_colors)+  
+  scale_fill_manual(values=family_colors)+
+  theme_classic()+
+  theme(plot.margin = margin(, 0.5, , , "cm"))+
+  scale_x_continuous(breaks = c(-0.25, 0, 0.25, 0.5),
+                     labels = c("-0.25", "0", "0.25", "0.5"),
+                     limits = c(-0.35, 0.4))
+
+# FOO
+set.seed(3)
+p.FOO.ind <- sp.FOO.ind.plot %>% 
+  ggplot(aes(x=NMDS1, y=NMDS2, color=Family.Group, fill=Family.Group))+
+  geom_point(size=1.5, alpha=0.5, show.legend = FALSE)+
+  geom_jitter(data=centroid.sp.FOO.ind,
+             mapping=aes(x=centroid1, y=centroid2),
+                         color="black", shape=21, 
+                        size=2, alpha=0.7, width=0.01, height=0.01, stat="unique",
+             show.legend = FALSE)+
+  scale_color_manual(values=family_colors)+  
+  scale_fill_manual(values=family_colors)+
+  theme_classic()+
+  theme(plot.margin = margin(, 0.5, , , "cm"))
+```
+
+# Combine plots
+
+```{r}
+(p.RRA.season | p.FOO.season) /
+(p.RRA.territory | p.FOO.territory)/
+(p.RRA.ind | p.FOO.ind)
+```
