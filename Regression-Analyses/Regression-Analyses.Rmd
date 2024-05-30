@@ -31,12 +31,39 @@ convert.FOO <- function(x) ifelse(x >0, 1, 0)
 
 # Load packages
 library(tidyverse)
+library(corrplot)
 library(plotrix)
 library(mgcv)
 library(marginaleffects)
 library(DHARMa)
 library(car)
 library(ggpubr)
+```
+
+# Approach
+
+To test whether land use and land cover affected diet, we constructed a 1-km buffer around the midpoint of the minimum convex polygon enclosing all fecal samples collected in a territory in ArcGIS Pro 3.1.0 and calculated the following metrics for each buffer: mean percent impervious surface cover and mean percent urban cover from the 2019 National Land Cover Database; mean housing density and mean population density from the 2020 US Census; and the number of food services (e.g., restaurants, cafeterias) from the City and County of San Francisco. We used 1 km as our buffer distance because it was the maximum distance that did not overlap buffers of neighboring territories and coyote territories tend to be contiguous. All land use and land cover covariates were highly correlated (r \> 0.7; see code below). Accordingly, we used only one of these covariates in any model.
+
+We fit a beta regression for RRA (function "gam" with family betar in mgcv) and a quasibinomial GLM (function "glm" in stats) for FOO to test the effect of percent cover of impervious surfaces, a measure of urbanization, on the proportion and frequency of anthropogenic food in each territory. We applied these same models to test the effect of the number of food services, an attractant for rodents, on the proportion and frequency of nuisance rodents (*Rattus rattus*, *Rattus norvegicus*, and *Mus musculus*) in the diet in each territory.
+
+We calculated the average marginal effect of our predictors on diet to estimate the percentage of change in the predicted consumption of anthropogenic food or nuisance rodents given a unit change in percent cover of impervious surfaces or number of food services (function "avg_slopes" in marginal effects).
+
+# Covariate correlation matrix
+
+```{r}
+# Load covariate data and remove Sunset Reservoir, which was not used in territory-level analyses
+covariates <- read.csv("Regression-Analyses/Territory_All_Covariates.csv") %>%
+  filter(Territory != "Sunset Res") %>% 
+  select(-c(Territory)) # remove territory column
+  
+# Fix column names
+colnames(covariates) <- c("Impervious Surface Area", "Urban Cover", "Food Services", "Population Density", "Housing Density")
+
+# Run correlation matrix of pearson's correlations
+M <- cor(covariates)
+
+# Plot correlogram
+corrplot(M, method="number", type="upper", order="hclust", tl.col="black", tl.srt=45, diag=T)
 ```
 
 # Anthropogenic food x impervious surface cover
