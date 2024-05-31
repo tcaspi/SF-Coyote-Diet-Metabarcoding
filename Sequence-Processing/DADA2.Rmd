@@ -180,4 +180,4 @@ row.names(asv_tab) <- sub(">", "", asv_headers)
 write.table(asv_tab, "ASVs_counts.txt", sep="\t", quote=F)
 ```
 
-Use the ASVs_counts.txt tables for taxonomy assignment in BLAST+. After assigning taxonomy for each batch, these files must be further filtered prior to diet analyses. See Filtering-and-QC folder for next steps.
+Use the ASVs.fa file for taxonomy assignment in BLAST+ and add taxonomy to the ASVs_counts.txt file. After assigning taxonomy for each batch, these files must be further manually filtered prior to diet analyses. See Filtering-and-QC folder for next steps.
