@@ -314,7 +314,7 @@ for (i in 1:num_iterations) {
 }
 ```
 
-The piece of code above takes a long time to run. The model output is saved and can be loaded to save time:
+The piece of code above takes a long time to run. The model output is saved and can be loaded to save time. Move the file into the PERMANOVA folder in order to load it.
 
 ```{r}
 # Load results list if not re-running code above
@@ -434,7 +434,7 @@ for (i in 1:num_iterations) {
 }
 ```
 
-The piece of code above takes a long time to run. The model output is saved and can be loaded to save time:
+The piece of code above takes a long time to run. The model output is saved and can be loaded to save time. Move the file into the PERMANOVA folder in order to load it.
 
 ```{r}
 # Load results list if not re-running code above
