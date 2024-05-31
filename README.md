@@ -2,7 +2,7 @@
 
 **Title:** Urban landscape heterogeneity shapes individual and territory-level variation in coyote diet
 
-**Abstract:** In the past decade, studies have demonstrated that several traits, including foraging behavior and diet, differ between urban and nonurban wildlife populations. However, little is known about how environmental heterogeneity shapes dietary variation of organisms within cities. We examined the diets of coyotes (*Canis latrans*) in San Francisco to quantify territory- and individual-level dietary differences and determine how within-city variation in land cover and land use affect coyote diet. We genotyped fecal samples for individual coyote identification and quantified diet with DNA metabarcoding. The highest contributor to coyote diet was anthropogenic food followed by small mammals. The most frequently detected species were domestic chicken, pocket gopher (*Thomomys bottae*), pig, and raccoon (*Procyon lotor*). Diet composition varied significantly across territories and among individuals. Within family groups, however, individual diets were relatively consistent. The representation of anthropogenic food in scats was correlated with impervious surface cover, suggesting that coyotes consumed more human food in more urbanized territories. The representation of invasive, human-commensal rodents in the diet was correlated with the number of food services in a territory. Overall, our results revealed substantial intraspecific variation in coyote diet associated with urban heterogeneity and point to a diversifying effect of urbanization on population diet.
+**Abstract:** In the past decade, studies have demonstrated that several traits, including foraging behavior and diet, differ between urban and nonurban wildlife populations. However, little is known about how environmental heterogeneity shapes dietary variation of organisms within cities. We examined the diets of coyotes (*Canis latrans*) in San Francisco to quantify territory- and individual-level dietary differences and determine how within-city variation in land cover and land use affect coyote diet. We genotyped fecal samples for individual coyote identification and quantified diet with DNA metabarcoding. The highest contributor to coyote diet was anthropogenic food followed by small mammals. The most frequently detected species were domestic chicken, pocket gopher (*Thomomys bottae*), pig, and raccoon (*Procyon lotor*). Diet composition varied significantly across territories and among individuals. Within family groups, however, individual diets were relatively consistent. The representation of anthropogenic food in scats was correlated with impervious surface cover, suggesting that coyotes consumed more human food in more urbanized territories. The representation of invasive, human-commensal rodents in the diet was correlated with the number of food services in a territory. Overall, our results revealed substantial intraspecific variation in coyote diet associated with urban heterogeneity and point to a diversifying effect of urbanization on animal diet.
 
 **Code version:** R v 4.2.1
 
@@ -40,42 +40,43 @@
 ## 1. Sequence-Processing
 
 -   Trimming-Reads.Rmd: trim fastq files with cutadapt. High performance computing required.
--   DADA2.Rmd: identify ASVs with DADA2. High performance computing required.
+-   DADA2.Rmd: correct amplicon errors and infer amplicon sequence variants (ASVs) with DADA2 denoising algorithm. High performance computing required.
 
 ## 2. Filtering-and-QC
 
--   FilteringReads.Rmd: R scripts for filtering denoised data. The input files are ASV tables output by DADA2 with taxonomy assigned by BLAST+.
+-   FilteringReads.Rmd: R scripts for manual filtering of denoised data. The input files are ASV count tables output by DADA2 with taxonomy assigned by BLAST+ (output of step 1). These count tables are provided.
 
 ## 3. Data Visualization and Statistical Analyses
 
-Creating figures or conducting statistical analyses requires that filtering and QC steps have been run as filtered and finalized data frames are needed for visualizing and analyzing diet data.
+Creating figures or conducting statistical analyses requires that filtering and QC steps have been run as denoised and filtered data frames are required for visualizing and analyzing diet data.
 
 ### Diet-Plots
 
--   Code to generate figures 1 and 2 in the main text
+-   R scripts to generate Figures 1 and 2 in the main text.
 
-### iNEXT: Sample Coverage, Species Richness, Species Diversity
+### Regression-Analyses
 
--   Script for generating rarefaction curve plots and calculating diversity metrics for both territories and individuals
+-   Correlation matrix of land cover and land use covariates (Figure S3).
+-   Beta regression for RRA and a quasibinomial GLM for FOO to test the effect of percent cover of impervious surfaces on the proportion and frequency of anthropogenic food in each territory and the number of food services on the proportion and frequency of nuisance rodents in the diet in each territory.
+-   R script to generate Figure 3 in the manuscript.
 
-### Ordination (nMDS)
+### iNEXT
 
--   Add details here
+-   R script for generating rarefaction curve plots and calculating diversity metrics and sample coverage for coyote territories and individuals.
+
+### nMDS
+
+-   R script constructing dissimilarity matrices and ordinating with non-metric multidimensional scaling to visualize dietary differences among biological seasons, territories, and individuals.
 
 ### PERMANOVA
 
 -   Add details here
 
-### Regression Analyses
-
--   Add details here for statistical analyses
--   Code to generate figure 3 in the main text
-
 ### SIMPER
 
 -   Add details here
 
-### Replication Analyses
+### Replication-Analyses
 
 -   Add details here
 -   30 extraction replicates that were actually metabarcoded; 44 PCR replicates from mini exp 7 that intersect; 78 PCR replicates from mini exp 1 that intersect; In the end, 10+54+23 = 87 pairs remaining
