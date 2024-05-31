@@ -8,7 +8,7 @@
 
 **To add:**
 
--   Overview of folders/files and their contents
+-   Overview of folders/files and their contents (test)
 
 -   Instructions for users to run the software (e.g. explain the project workflow and any configuration parameters of your software)
 
