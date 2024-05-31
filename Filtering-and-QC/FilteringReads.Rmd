@@ -291,3 +291,43 @@ write.csv(func.FOO.clean, "Filtering-and-QC/func.FOO.clean.csv")
 write.csv(sp.RRA.clean, "Filtering-and-QC/sp.RRA.clean.csv")
 write.csv(sp.FOO.clean, "Filtering-and-QC/sp.FOO.clean.csv")
 ```
+
+# Generate filtered dataset for replication analyses
+
+The function above removes duplicate samples from extraction/PCR replication. We will need a species-level RRA data frame that does not do this for the replication analysis. The code below cleans the diet data without removing replicate samples.
+
+Clean diet data:
+```{r}
+# Define input data frames
+input <- list(sp.RRA)
+
+# Define function to clean data
+clean.data.replicates <- function(x) {left_join(x, metadata, by = "SampleID") %>%
+    filter((Cytb_Sp != "dog" & Cytb_Sp != "raccoon") %>% replace_na(T)) %>%
+    filter((Geno.Sp != "dog") %>% replace_na(T)) %>%
+    filter(!SampleID %in% zero.read.scats)}
+    
+# Run the function on all four input data frames
+results <- lapply(input, clean.data.replicates)
+
+# Save the output as four separate data frames
+sp.RRA.output.reps <- results[[1]]
+
+# Retain samples only
+sp.RRA.output.reps <- sp.RRA.output.reps %>% 
+  select(-c("Name":"Cytb_Sp")) %>% 
+  relocate(Replicate, .after=SampleID) %>% 
+  mutate(Replicate = case_when((Replicate == "Yes original") ~ paste("batch1"),
+                              (Replicate == "Yes redo") ~ paste("batch2"),
+                              TRUE ~ paste("None")))
+
+# Identify columns from species data frame where all values are zeros
+zero_columns <- sapply(sp.RRA.output.reps[, -1], function(col) all(col == 0))
+
+# Remove columns where all values are zeros
+sp.RRA.clean.reps <- sp.RRA.output.reps[, c(TRUE, !zero_columns)]
+
+# Save CSV for replication analysis
+write.csv(sp.RRA.clean.reps, "Replication-Analysis/sp.RRA.clean.replicates.csv")
+```
+
