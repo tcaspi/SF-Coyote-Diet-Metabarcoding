@@ -8,15 +8,15 @@
 
 **To add:**
 
--   Overview of folders/files and their contents (test)
+-   Overview of folders/files and their contents
 
 -   Instructions for users to run the software (e.g. explain the project workflow and any configuration parameters of your software)
 
--   Links to protocols.io or equivalent methods repositories, where applicable
-
--   Once a paper is accepted, please include author names, contact details, links to preprint and the publication.
-
 ## Data Files:
+
+### Assign-Taxonomy
+
+-   12S_reference_lib.fasta: Custom reference library of 12SV5 sequences of all vertebrate genera recovered from pilot studies.
 
 ### Filtering-and-QC
 
@@ -35,30 +35,49 @@
 
 -   Territory_All_Covariates.csv: land cover and land use covariates for each territory
 
+### nMDS
+
+-   sp.RRA.rds: model output from metaMDS RRA data
+-   sp.FOO.rds: model output from metaMDS FOO data
+-   sp.RRA.ind.rds: model output from metaMDS RRA data for frequently sampled coyotes
+-   sp.FOO.ind.rds: model output from metaMDS FOO data for frequently sampled coyotes
+
+### PERMANOVA
+
+-   PERMANOVA_sample_RRA.rds: model output from 1,000 trials of RRA-based data when subsampling down to one observation per individual
+
+-   PERMANOVA_sample_FOO.rds: model output from 1,000 trials of FOO-based data when subsampling down to one observation per individual
+
+-   Move data files into PERMANOVA folder prior to running code
+
 ## Code:
 
 ## 1. Sequence-Processing
 
--   Trimming-Reads.Rmd: trim fastq files with cutadapt. High performance computing required.
+-   Trimming-Reads.Rmd: trim raw fastq files with cutadapt. High performance computing required.
 -   DADA2.Rmd: correct amplicon errors and infer amplicon sequence variants (ASVs) with DADA2 denoising algorithm. High performance computing required.
 
-## 2. Filtering-and-QC
+## 2. Assign-Taxonomy
 
--   FilteringReads.Rmd: R scripts for manual filtering of denoised data. The input files are ASV count tables output by DADA2 with taxonomy assigned by BLAST+ (output of step 1). These count tables are provided.
+-   BLAST.Rmd: create local BLAST database of 12SV5 sequences of vertebrate genera recovered from pilot studies. Use the *blastn* feature of BLAST+ to assign ASVs via the custom database and append or correct as needed with the nucleotide database of NCBI available online.
 
-## 3. Data Visualization and Statistical Analyses
+## 3. Filtering-and-QC
+
+-   FilteringReads.Rmd: manually filter denoised data. The input files are ASV count tables output by DADA2 during sequence processing with taxonomy assigned by BLAST+ (output of step 1). These count tables are provided.
+
+## 4. Data Visualization and Statistical Analyses
 
 Creating figures or conducting statistical analyses requires that filtering and QC steps have been run as denoised and filtered data frames are required for visualizing and analyzing diet data.
 
 ### Diet-Plots
 
--   R scripts to generate Figures 1 and 2 in the main text.
+-   Generate Figures 1 and 2 in the main text to visualize relative amounts of diet items in the population diet and among biological seasons, territories, and individuals.
 
 ### Regression-Analyses
 
 -   Correlation matrix of land cover and land use covariates (Figure S3).
 -   Beta regression for RRA and a quasibinomial GLM for FOO to test the effect of percent cover of impervious surfaces on the proportion and frequency of anthropogenic food in each territory and the number of food services on the proportion and frequency of nuisance rodents in the diet in each territory.
--   R script to generate Figure 3 in the manuscript.
+-   R script to generate Figure 3 in the manuscript, showing correlation between land cover/land use and diet items.
 
 ### iNEXT
 
@@ -70,11 +89,11 @@ Creating figures or conducting statistical analyses requires that filtering and 
 
 ### PERMANOVA
 
--   Add details here
+-   Permutation-based multivariate analysis of variance tests to investigate differences in diet as a function of biological season and territory as well as among individuals and family groups.
 
 ### SIMPER
 
--   Add details here
+-   Similarity percentage analysis to assess which diet items contributed the most to observed differences in coyote diets among territories.
 
 ### Replication-Analyses
 
