@@ -33,36 +33,31 @@ Creating figures or conducting statistical analyses requires that filtering and 
 
 ### Diet-Plots
 
--   Generate Figures 1 and 2 in the main text to visualize relative amounts of diet items in the population diet and among biological seasons, territories, and individuals.
+-   Diet-Plots.Rmd: generate Figures 1 and 2 in the main text to visualize relative amounts of diet items in the population diet and among biological seasons, territories, and individuals.
 
 ### Regression-Analyses
 
--   Correlation matrix of land cover and land use covariates (Figure S3).
--   Beta regression for RRA and a quasibinomial GLM for FOO to test the effect of percent cover of impervious surfaces on the proportion and frequency of anthropogenic food in each territory and the number of food services on the proportion and frequency of nuisance rodents in the diet in each territory.
--   R script to generate Figure 3 in the manuscript, showing correlation between land cover/land use and diet items.
+-   Regression-Analyses.Rmd: (1) correlation matrix of land cover and land use covariates (Figure S3); (2) beta regression for RRA and quasibinomial GLM for FOO to test the effect of percent cover of impervious surfaces on the proportion and frequency of anthropogenic food in each coyote territory and the number of food services on the proportion and frequency of nuisance rodents in the diet in each coyote territory; and (3) generate Figure 3 in the manuscript, showing correlation between land cover/land use and diet items.
 
 ### iNEXT
 
--   R script for generating rarefaction curve plots and calculating diversity metrics and sample coverage for coyote territories and individuals.
+-   iNEXT.Rmd: generate rarefaction curve plots and calculating diversity metrics and sample coverage for coyote territories and individuals.
 
 ### nMDS
 
--   R script constructing dissimilarity matrices and ordinating with non-metric multidimensional scaling to visualize dietary differences among biological seasons, territories, and individuals.
+-   nMDS.Rmd: construct dissimilarity matrices and ordinate with non-metric multidimensional scaling to visualize dietary differences among biological seasons, territories, and individuals.
 
 ### PERMANOVA
 
--   Permutation-based multivariate analysis of variance tests to investigate differences in diet as a function of biological season and territory as well as among individuals and family groups.
+-   PERMANOVA.Rmd: permutation-based multivariate analysis of variance tests to investigate differences in diet as a function of biological season and territory as well as among individuals and family groups.
 
 ### SIMPER
 
--   Similarity percentage analysis to assess which diet items contributed the most to observed differences in coyote diets among territories.
+-   SIMPER.Rmd: similarity percentage analysis to assess which diet items contributed the most to observed differences in coyote diets among territories.
 
 ### Replication-Analyses
 
--   Add details here
--   30 extraction replicates that were actually metabarcoded; 44 PCR replicates from mini exp 7 that intersect; 78 PCR replicates from mini exp 1 that intersect; In the end, 10+54+23 = 87 pairs remaining
-
-### Figure for Controls
+-   Replication-Analyses.Rmd: calculating correlations between extraction replicate and PCR replicate sample pairs to assess the repeatability of results.
 
 ## Data Files:
 
@@ -101,3 +96,11 @@ Creating figures or conducting statistical analyses requires that filtering and 
 -   PERMANOVA_sample_FOO.rds: model output from 1,000 trials of FOO-based data when subsampling down to one observation per individual
 
 -   Move data files into PERMANOVA folder prior to running code
+
+### Replication-Analysis
+
+-   Replicates_set1.csv: sequence reads for PCR replicates from set 7.
+
+-   Replicates_set7.csv: sequence reads for PCR replicates from set 1.
+
+-   sp.RRA.clean.replicate.csv: filtered and cleaned diet data containing duplicate samples from extraction and PCR replication.
