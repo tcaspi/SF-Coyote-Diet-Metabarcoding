@@ -28,6 +28,8 @@ These replicates are separated into three groups:
 
 3)  Extraction/PCR replicates between batches 1 and 2 in the original manuscript data set (these are located across various sets within both batches)
 
+Data files containing sequence reads for PCR replicates from set 7 and PCR replicates from set 1 are in the Replication-Analysis folder.
+
 For each set, we need to ensure that all samples have been filtered following the same approach, identify sample pairs between batches post-filtering, and calculate correlation values for sample pairs.
 
 # PCR replicates from set 7
