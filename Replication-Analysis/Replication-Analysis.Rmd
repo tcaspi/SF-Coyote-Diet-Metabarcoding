@@ -1,0 +1,392 @@
+---
+title: "Replication-Analysis"
+author: " "
+date: "2024-05-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(janitor)
+library(stringr)
+
+# Define remove rare items function
+supress.to.zero <- function(x) ifelse(x <0.005, 0, x)
+```
+
+# Approach
+
+Although some studies recommend use of technical replicates for all samples, we opted to maximize the number of biological replicates (i.e., distinct scat samples) rather than technical replicates given limited resources. Nevertheless, to assess the repeatability of our results, we selected an arbitrary subset of 152 samples sequenced in one batch to replicate in another batch to check for consistency in recovered sequences.
+
+These replicates are separated into three groups:
+
+1)  PCR replicates from set 7 (original data set and a replicate data set)
+
+2)  PCR replicates from set 1 (original data set and a replicate data set)
+
+3)  Extraction/PCR replicates between batches 1 and 2 in the original manuscript data set (these are located across various sets within both batches)
+
+For each set, we need to ensure that all samples have been filtered following the same approach, identify sample pairs between batches post-filtering, and calculate correlation values for sample pairs.
+
+# PCR replicates from set 7
+
+## Prepare data - set 7 replicates
+
+For the replicates, follow the same steps for manual filtering post-DADA2 by removing non-diet items, converting to proportions, removing rare diet items within scats, and normalizing:
+
+```{r}
+# Load replicate data
+reps_set7 <- read.csv("Replication-Analysis/Replicates_set7.csv")
+
+# Retain list of replicate sample IDs
+sample.list.reps.set7 <- as.data.frame(reps_set7$SampleID) %>%  setNames(c("SampleID"))
+
+# Transpose data frame
+reps_set7_t <- reps_set7 %>% 
+  select(-c(Run)) %>% 
+  data.table::transpose(make.names = "SampleID", keep.names = "FinalName")
+
+# Create list of non-diet items to remove
+nondiet_set7 <- c("Antilocapra.americana", "Canis", "Cervus.elaphus", "Chaetodipus", "Dama.dama", "Dasypterus.xanthinus", "Felidae", "Gulo.gulo", "Homo.sapiens", "Hypomesus.nipponensis", "Macaca.mulatta", "Mirounga", "Odocoileus", "Oreortyx.pictus", "Perognathus.parvus", "Phoebastria.albatrus", "Puma.concolor", "Reithrodontomys.raviventris",	"Spilogale.gracilis", "Tamiasciurus", "Urocyon.cinereoargenteus", "Ursus.americanus")
+
+# Create new data frame that only keeps diet reads
+reps_set7_prey <- reps_set7_t %>% 
+  filter(!FinalName %in% nondiet_set7 ) %>% 
+  data.table::transpose(keep.names = 'SampleID', make.names = 'FinalName')
+
+# Convert to proportions
+reps_set7_props <- reps_set7_prey %>%
+  adorn_percentages("row") %>% 
+  replace(is.na(.),0)
+
+# Apply within-scat filtering threshold
+reps_set7_rm.rare <- reps_set7_props %>% 
+  mutate_if(is.numeric, supress.to.zero)
+
+# Pull out the non-numeric columns from the data-frame prior to transformation
+character_set7 <- reps_set7_rm.rare %>% 
+  select(SampleID)
+
+# Normalize numeric columns using the apply function
+reps_set7_norm <-t(apply(reps_set7_rm.rare[,2:ncol(reps_set7_rm.rare)], 1, function(x) x/sum(x)))
+
+# Add character columns back to the data frame to create the RRA data set for set 7 replicates
+reps_set7_norm <- data.frame(character_set7, reps_set7_norm)
+```
+
+## Prepare data - set 7 originals
+
+Load and subset the original data set to those in set 7 that have replicates:
+
+```{r}
+# Load diet data
+sams <- read.csv("Filtering-and-QC/sp.RRA.clean.csv") %>% select(-c(X))
+
+# Select only samples that match replicates from set 7
+sams_set7 <- inner_join(sample.list.reps.set7, sams, by = "SampleID")  %>% 
+  mutate(Run = "OriginalBatch", Group = row_number()) %>% 
+  relocate(Group, .after="SampleID") %>% 
+    relocate(Run, .after="Group")
+```
+
+## Make combined data frame of replicates and originals
+
+First, subset the replicate samples to match the sample list of originals:
+
+```{r}
+# Make list of only samples with pairs across both data sets
+sample.list.sams_set7 <- as.data.frame(sams_set7$SampleID) %>% setNames(c("SampleID"))
+
+# Subset replicate data set to only include samples with pairs
+reps_set7_subset <- left_join(sample.list.sams_set7, reps_set7_norm, by = "SampleID") %>% 
+  mutate(Run = "ReplicateBatch", Group = row_number()) %>% 
+  relocate(Group, .after="SampleID") %>% 
+  relocate(Run, .after="Group")
+```
+
+Next, bind the data frames and replace NAs with zeros. Reformat the combined dataframe for correlation analyses:
+
+```{r}
+# Combine data frames
+pairs.set7 <- plyr::rbind.fill(reps_set7_subset, sams_set7) %>% 
+  replace(is.na(.), 0) %>% 
+  arrange(Group) %>% 
+  mutate(SampleID = case_when((Run == "ReplicateBatch") ~ paste(SampleID, "_A"),
+                             TRUE ~ paste(SampleID))) %>% 
+  select(c("SampleID", "Group", "Run"), sort(colnames(.))) # sort diet items alphabetically
+
+# Transpose data frame and prep for cor function
+pairs.set7_t <- pairs.set7 %>% 
+  select(-c(Group, Run))
+
+pairs.set7_t <- setNames(data.frame(t(pairs.set7_t[ , - 1])), pairs.set7_t[ , 1])
+```
+
+## Calculate correlations
+
+```{r}
+# Create an empty vector to store the correlation values
+correlations_set7 <- numeric(ncol(pairs.set7_t)/2)
+
+# Loop through the pairs and calculate correlations
+for (i in 1:23) {
+  
+  # Calculate the index of the first column for the pair
+  col_index_1 <- (i - 1) * 2 + 1
+  
+  # Calculate the index of the second column for the pair
+  col_index_2 <- col_index_1 + 1
+  
+  # Calculate the correlation between the two columns and store it in the vector
+  correlations_set7[i] <- cor(pairs.set7_t[, col_index_1], pairs.set7_t[, col_index_2])
+}
+
+# The 'correlations' vector now contains the correlation values for all 23 pairs
+correlations_set7
+
+# Mean correlation
+mean(correlations_set7)
+
+# Data frame containing sample pairs and correlation values
+temp_corr_set7 <- as.data.frame(correlations_set7) %>% uncount(2)
+reps_sfcoy_set7 <- cbind(temp_corr_set7, pairs.set7)
+```
+
+Mean correlation is 0.9950719
+
+# PCR replicates from set 1
+
+## Prepare data - set 1 replicates
+
+For the replicates, follow the same steps for manual filtering post-DADA2 by removing non-diet items, removing low-frequency reads based on controls, converting to proportions, removing rare diet items within scats, and normalizing.
+
+```{r}
+# Load replicate data
+reps_set1 <- read.csv("Replication-Analysis/Replicates_set1.csv")
+
+# Transpose data frame
+reps_set1_t <- reps_set1 %>% 
+  select(-c(Run)) %>% 
+  data.table::transpose(make.names = "SampleID", keep.names = "FinalName")
+
+# Create list of non-diet items to remove
+nondiet_set1 <- c("Antilocapra.americana", "Canis", "Cervus.elaphus", "Chaetodipus", "Dama.dama", "Dasypterus.xanthinus", "Felidae", "Gulo.gulo", "Homo.sapiens", "Hypomesus.nipponensis", "Macaca.mulatta", "Mirounga", "Odocoileus", "Oreortyx.pictus", "Perognathus.parvus", "Phoebastria.albatrus", "Puma.concolor", "Reithrodontomys.raviventris",	"Spilogale.gracilis", "Tamiasciurus", "Urocyon.cinereoargenteus", "Ursus.americanus")
+
+# Create new data frame that only keeps diet reads
+reps_set1_prey <- reps_set1_t %>% 
+  filter(!FinalName %in% nondiet_set1 ) %>% 
+  data.table::transpose(keep.names = 'SampleID', make.names = 'FinalName')
+
+# Investigate read counts
+reps_set1_prey_total <- reps_set1_prey %>% 
+    dplyr::mutate(sum = rowSums(across(where(is.numeric)), na.rm=TRUE), .after = "SampleID")
+
+# Remove low-read count samples (n= <150 reads because one negative control had 147 reads in it)
+reps_set1_rm.low <- reps_set1_prey_total %>% 
+  filter(sum >= 150) %>% 
+  select(-c(sum))
+
+# Convert to proportions
+reps_set1_props <- reps_set1_rm.low %>%
+  adorn_percentages("row") %>% 
+  replace(is.na(.),0)
+
+# Apply within-scat filtering threshold
+reps_set1_rm.rare <- reps_set1_props %>% 
+  mutate_if(is.numeric, supress.to.zero)
+
+# Pull out the non-numeric columns from the data-frame prior to transformation
+character_set1 <- reps_set1_rm.rare %>% 
+  select(SampleID)
+
+# Normalize numeric columns using the apply function
+reps_set1_norm <-t(apply(reps_set1_rm.rare[,2:ncol(reps_set1_rm.rare)], 1, function(x) x/sum(x)))
+
+# Add character columns back to the data frame to create the RRA data set for set 1 replicates
+reps_set1_norm <- data.frame(character_set1, reps_set1_norm)
+
+# Retain list of replicate sample IDs
+sample.list.reps.set1 <- as.data.frame(reps_set1_norm$SampleID) %>%  setNames(c("SampleID"))
+```
+
+## Prepare data - set 1 originals
+
+Load and subset the original data set to those in set 1 that have replicates:
+
+```{r}
+# Load diet data
+sams <- read.csv("Filtering-and-QC/sp.RRA.clean.csv") %>% select(-c(X))
+
+# Select only samples that match replicates from set 1
+sams_set1 <- inner_join(sample.list.reps.set1, sams, by = "SampleID")  %>% 
+  mutate(Run = "OriginalBatch", Group = row_number()) %>% 
+  relocate(Group, .after="SampleID") %>% 
+    relocate(Run, .after="Group")
+```
+
+## Make combined data frame of replicates and originals
+
+First, subset the replicate samples to match the sample list of originals:
+
+```{r}
+# Make list of only samples with pairs across both data sets
+sample.list.sams_set1 <- as.data.frame(sams_set1$SampleID) %>% setNames(c("SampleID"))
+
+# Subset replicate data set to only include samples with pairs
+reps_set1_subset <- left_join(sample.list.sams_set1, reps_set1_norm, by = "SampleID") %>% 
+  mutate(Run = "ReplicateBatch", Group = row_number()) %>% 
+  relocate(Group, .after="SampleID") %>% 
+  relocate(Run, .after="Group")
+```
+
+Next, bind the data frames and replace NAs with zeros. Reformat the combine data frame for correlation analyses:
+
+```{r}
+# Combine data frames
+pairs.set1 <- plyr::rbind.fill(reps_set1_subset, sams_set1) %>% 
+  replace(is.na(.), 0) %>% 
+  arrange(Group) %>% 
+  mutate(SampleID = case_when((Run == "ReplicateBatch") ~ paste(SampleID, "_A"),
+                             TRUE ~ paste(SampleID))) %>% 
+  select(c("SampleID", "Group", "Run"), sort(colnames(.))) # sort diet items alphabetically
+
+# Transpose data frame and prep for cor function
+pairs.set1_t <- pairs.set1 %>% 
+  select(-c(Group, Run))
+
+pairs.set1_t <- setNames(data.frame(t(pairs.set1_t[ , - 1])), pairs.set1_t[ , 1])
+```
+
+## Calculate correlations
+
+```{r}
+# Create an empty vector to store the correlation values
+correlations_set1 <- numeric(ncol(pairs.set1_t)/2)
+
+# Loop through the pairs and calculate correlations
+for (i in 1:54) {
+  
+  # Calculate the index of the first column for the pair
+  col_index_1 <- (i - 1) * 2 + 1
+  
+  # Calculate the index of the second column for the pair
+  col_index_2 <- col_index_1 + 1
+  
+  # Calculate the correlation between the two columns and store it in the vector
+  correlations_set1[i] <- cor(pairs.set1_t[, col_index_1], pairs.set1_t[, col_index_2])
+}
+
+# The 'correlations' vector now contains the correlation values for all 54 pairs
+correlations_set1
+
+# Mean correlation
+mean(correlations_set1)
+
+# Data frame containing sample pairs and correlation values
+temp_corr_set1 <- as.data.frame(correlations_set1) %>% uncount(2)
+reps_sfcoy_set1 <- cbind(temp_corr_set1, pairs.set1)
+```
+
+Mean correlation is 0.9235594
+
+# Extraction and PCR replicates from between batches 1 and 2
+
+## Prepare data
+
+Load in diet data frame that includes duplicates (replicates) in order to complete this analysis. This file is generated by the FilteringReads.Rmd file and saved in the Replication-Analysis folder.
+
+```{r}
+# Load diet data that includes replicate samples
+sams <- read.csv("Replication-Analysis/sp.RRA.clean.replicates.csv")
+
+# Make list of extraction replicates
+extraction.reps <- sams %>%
+  filter(Replicate == "batch2") %>% 
+  select(SampleID)
+
+# Make list of original samples 
+original.sams <- sams %>%
+  filter(Replicate == "batch1") %>% 
+  select(SampleID)
+
+# Bind sample names to create full list
+sample.list <- rbind(original.sams, extraction.reps)
+
+# Filter diet data set to include only samples with replicate pairs
+reps <- inner_join(sample.list, sams, by="SampleID")
+
+# Fix SampleID formatting and arrange by SampleID
+reps <- reps %>% 
+  mutate(SampleID = case_when((Replicate == "batch2") ~ paste(SampleID,"_R"),
+                             TRUE ~ paste(SampleID)))
+
+reps$SampleID <- gsub("RS", "S", reps$SampleID) #remove "R"
+
+reps <- reps %>% 
+  arrange(SampleID)
+
+# Remove samples with no pair (not all samples passed filtering criteria)
+pairs <- reps %>% 
+  filter(SampleID != "S20_3777"
+         & SampleID != "S20_3787 _R"
+         & SampleID != "S20_3809 _R"
+         & SampleID != "S20_3815"
+         & SampleID != "S20_3832 _R"
+         & SampleID != "S21_0054 _R"
+         & SampleID != "S21_0062"
+         & SampleID != "S21_0085"
+         & SampleID != "S21_0105 _R"
+         & SampleID != "S21_0109 _R"
+         & SampleID != "S21_0113 _R")
+
+# Transpose data frame and prep for cor function
+pairs_t <- pairs %>% 
+  select(-c(Replicate))
+
+pairs_t <- setNames(data.frame(t(pairs_t[ , - 1])), pairs_t[ , 1])
+```
+
+## Calculate correlations
+
+```{r}
+# Create an empty vector to store the correlation values
+correlations_set <- numeric(ncol(pairs_t)/2)
+
+# Loop through the pairs and calculate correlations
+for (i in 1:10) {
+  
+  # Calculate the index of the first column for the pair
+  col_index_1 <- (i - 1) * 2 + 1
+  
+  # Calculate the index of the second column for the pair
+  col_index_2 <- col_index_1 + 1
+  
+  # Calculate the correlation between the two columns and store it in the vector
+  correlations_set[i] <- cor(pairs_t[, col_index_1], pairs_t[, col_index_2])
+}
+
+# The 'correlations' vector now contains the correlation values for all 10 pairs
+correlations_set
+
+# Mean correlation
+mean(correlations_set)
+
+# Data frame containing sample pairs and correlation values
+temp_corr_set <- as.data.frame(correlations_set) %>% uncount(2)
+reps_sfcoy_set <- cbind(temp_corr_set, pairs)
+```
+
+Mean correlation is 0.9450304
+
+# Overall mean and standard deviation of correlation pairs
+
+```{r}
+# Combine all correlations
+all.corr <- c(correlations_set7, correlations_set1, correlations_set)
+
+length(all.corr) # 87 total pairs of samples
+mean(all.corr) # Overall mean correlation is 0.9449329
+sd(all.corr) # SD is 0.1137474
+```
