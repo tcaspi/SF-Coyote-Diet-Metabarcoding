@@ -1,0 +1,32 @@
+---
+title: "BLAST"
+author: " "
+date: "2024-05-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Assigning taxonomy with command-line BLAST
+
+BLAST+ must first be downloaded and installed: <https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/>
+
+This project used BLAST+ version 2.13.0
+
+The steps below are run from the command line.
+
+1)  Make a local database from the reference library (12S_reference_lib.fasta)
+
+```{sh}
+makeblastdb -in 12S_reference_lib.fasta -out 12Sdb -dbtype 'nucl' -hash_index
+```
+
+2)  Complete the query where ASVs.fa is the fasta file of final ASVs output from DADA2, 12Sdb is the name of the local database, and ASVs_out.out is the name of the output file.
+
+```{sh}
+blastn -query ASVs.fa -task blastn -db 12Sdb -out ASVs_out.out -outfmt "6 qseqid sseqid qacc sacc qstart qend qseq evalue score length pident staxids sscinames scomnames sblastnames stitle"
+```
+
+3)  Double check, add, and correct assignments with the full nucleotide database of NCBI available online: <https://blast.ncbi.nlm.nih.gov/Blast.cgi?PROGRAM=blastn&PAGE_TYPE=BlastSearch&LINK_LOC=blasthome>
