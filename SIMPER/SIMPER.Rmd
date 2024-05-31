@@ -1,0 +1,123 @@
+---
+title: "SIMPER"
+author: " "
+date: "2024-05-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(vegan)
+
+# Stop using scientific notation for numbers
+options(scipen = 999)
+```
+
+# Approach
+
+To assess which diet items contributed the most to observed differences in coyote diets among territories, we used similarity percentage analysis based on the dissimilarity matrix of the RRA data ("simper" in vegan).
+
+# Prepare data
+
+Prepare a diet data frame where each row is a territory and each column is the average RRA of each diet item.
+
+Load diet data and metadata:
+
+```{r}
+# Load diet data
+sp.RRA <- read.csv("Filtering-and-QC/sp.RRA.clean.csv") %>% select(-c(X))
+
+# Make sample list column
+sample_list <- sp.RRA %>% select(SampleID)
+
+# Load metadata, add territories, seasons, filter out Stern Grove and Sunset Reservoir, and select relevant columns
+metadata <- read.csv("Filtering-and-QC/All_Metadata.csv") %>% 
+  
+  # Add territories
+  mutate(Territory = case_when(
+    Site == "BERN" | Site == "STMA" ~ "Bernal",
+    Site == "GLEN" | Site == "LAGU" | Site == "TWIN" | Site == "MTDA" | Site == "GGHP" ~ "Glen",
+    Site == "SFGC" | Site == "OLYM" | Site == "LAKE" | Site == "FTFU" ~ "Merced",
+    Site == "BVP" | Site == "CHP" ~ "Corona",
+    Site == "TGPH" | Site == "HYDE" | Site == "FORT" ~ "Coit",
+    Site == "GGPE" ~ "GGP - East",
+    Site == "GGPW" | Site == "GGP" ~ "GGP - West",
+    Site == "LEND" | Site == "LAFY" ~ "Land's End",
+    Site == "MCLA" ~ "McLaren",
+    Site == "PRES" ~ "Presidio",
+    Site == "STFA" ~ "St. Francis",
+    Site == "SUNS" ~ "Sunset Res",
+    Site == "STGV" ~ "Stern Grove")) %>% 
+  
+  # Remove territories with low sample size
+  filter(Territory != "Sunset Res" & Territory != "Stern Grove") %>%
+  
+  # Select only relevant columns
+  select(c(SampleID, Territory)) %>%
+  
+  # Only keep metadata for samples in the final diet data frame
+  inner_join(sample_list, by = "SampleID")
+```
+
+Prepare diet data:
+
+```{r}
+# Filter out samples from diet matrix that are not in the metadata 
+sp.RRA.filt <- left_join(metadata, sp.RRA, by = "SampleID") %>% 
+  select(-c(Territory))
+
+territory.sp.RRA <- sp.RRA.filt %>% 
+  
+  # Pivot data frame
+  pivot_longer(-SampleID, names_to="Species", values_to = "RRA") %>% 
+  
+  # Join metadata to diet data
+  left_join(metadata, by = "SampleID") %>% 
+  
+  # Group by territory and species and calculate mean RRA
+  group_by(Territory, Species) %>% 
+  summarize(meanRRA = 100*mean(RRA), .groups="drop") %>% 
+  
+  # Pivot back to wide format
+  pivot_wider(names_from = "Species", values_from = "meanRRA") %>% 
+  
+  # Remove diet items with 0 detections across all scats (diet items in dropped territories)
+  select_if(~ !is.numeric(.) || sum(.) != 0)
+
+# Make territories the row names
+names <- territory.sp.RRA %>% select(Territory)
+
+territory.sp.RRA <- territory.sp.RRA %>% # remove territory column
+  select(-c(Territory))
+
+rownames(territory.sp.RRA) <- names$Territory # add as row names
+```
+
+# Run SIMPER
+
+If group argument is missing or has only one level, contributions are estimated for non-grouped data and dissimilarities show the overall heterogeneity in species abundances.
+
+```{r}
+# Run simper analysis (with no group)
+territory.simper <- simper(territory.sp.RRA, permutations = 999, ordered = TRUE)
+
+# Pull out overall dissimilarity
+as.numeric(territory.simper$total["overall"])*100
+
+# Make data frame with final table including species contribution to overall dissimilarity, standard deviation of contribution, percent contribution, and cumulative contribution
+output <- summary(territory.simper)["total"][[1]] %>% 
+  rownames_to_column("Species") %>%
+  select(-c(ratio)) %>% 
+  mutate(perc_cont = average/sum(average)) %>% # add percent contribution column
+  relocate(perc_cont, .before = cumsum) %>% 
+  mutate_if(is.numeric, ~ . * 100) %>%
+  rename
+
+output$Species <- gsub('\\.', ' ', output$Species) # change periods to spaces
+
+colnames(output) <- c("Diet Item", "Average Contribution to Overall Dissimilarity", "SD of Contribution", "Percent Contribution", "Cumulative Contribution") # change column names
+
+print(output)
+```
