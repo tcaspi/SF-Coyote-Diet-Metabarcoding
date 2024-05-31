@@ -4,15 +4,9 @@
 
 **Abstract:** In the past decade, studies have demonstrated that several traits, including foraging behavior and diet, differ between urban and nonurban wildlife populations. However, little is known about how environmental heterogeneity shapes dietary variation of organisms within cities. We examined the diets of coyotes (*Canis latrans*) in San Francisco to quantify territory- and individual-level dietary differences and determine how within-city variation in land cover and land use affect coyote diet. We genotyped fecal samples for individual coyote identification and quantified diet with DNA metabarcoding. The highest contributor to coyote diet was anthropogenic food followed by small mammals. The most frequently detected species were domestic chicken, pocket gopher (*Thomomys bottae*), pig, and raccoon (*Procyon lotor*). Diet composition varied significantly across territories and among individuals. Within family groups, however, individual diets were relatively consistent. The representation of anthropogenic food in scats was correlated with impervious surface cover, suggesting that coyotes consumed more human food in more urbanized territories. The representation of invasive, human-commensal rodents in the diet was correlated with the number of food services in a territory. Overall, our results revealed substantial intraspecific variation in coyote diet associated with urban heterogeneity and point to a diversifying effect of urbanization on animal diet.
 
-**Code version:** R v 4.2.1
-
-**To add:**
-
--   Overview of folders/files and their contents
-
--   Instructions for users to run the software (e.g. explain the project workflow and any configuration parameters of your software)
-
 ## Code:
+
+R v 4.2.1
 
 ## 1. Sequence-Processing
 
