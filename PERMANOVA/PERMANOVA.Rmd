@@ -1,0 +1,672 @@
+---
+title: "PERMANOVA"
+author: " "
+date: "2024-05-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(vegan)
+library(pairwiseAdonis)
+library(BiodiversityR)
+```
+
+# Approach
+
+To evaluate the significance of variation in vertebrate diet composition among territories, biological seasons, and individuals, we conducted a series of permutation-based multivariate analysis of variance tests (PERMANOVA; Anderson 2017) on the distance matrices. To test for seasonal differences, we used the date of sample collection to group scats according to biological season: mating: (November -- February), pupping (March -- June), and dispersal (July -- October). We first used all fecal samples to investigate differences in diet as a function of biological season and territory. Because not all scats yielded genotypes, and some samples came from the same individual, we verified that significant PERMANOVA results were not an artifact of pseudoreplication by conducting 1,000 trials in which we randomly sampled a single scat per individual.
+
+Because we were interested in individual dietary variation, we investigated differences in diet at the individual level by comparing the most frequently sampled coyotes (≥8 scats). In this test, we included individual nested within family group as the main predictor and used a sequential (Type I) sum of squares.
+
+We assessed differences in dispersion among all predictors to understand if dietary differences could be attributed to differences in group dispersion, a proxy for dietary niche breadth ("betadisper" and "permutest" in vegan). We ran all analyses with 999 permutations and conducted post-hoc tests for pairwise analysis with a Benjamini-Hochberg correction for multiple comparisons (via "pairwise.adonis" in the pairwiseAdonis package for composition and via "permutest" in the vegan package for dispersion.
+
+# All samples
+
+This dataset includes all samples assigned to a territory (n = 693) and therefore ignores genotypes.
+
+## Prepare data
+
+```{r}
+# Load diet data
+sp.RRA <- read.csv("Filtering-and-QC/sp.RRA.clean.csv") %>% select(-c(X))
+sp.FOO <- read.csv("Filtering-and-QC/sp.FOO.clean.csv") %>% select(-c(X))
+
+# Make sample list
+sample_list <- sp.RRA %>% select(SampleID)
+
+# Load metadata, add territories, biological seasons, and drop territories with low sample size
+metadata <- read.csv("Filtering-and-QC/All_Metadata.csv")
+
+
+# Load metadata, add territories, seasons, filter out transient territories and Sunset Reservoir, and select relevant columns
+metadata <- read.csv("Filtering-and-QC/All_Metadata.csv") %>% 
+  
+  # Add territories 
+  mutate(Territory = case_when(
+    Site == "BERN" | Site == "STMA" ~ "Bernal",
+    Site == "GLEN" | Site == "LAGU" | Site == "TWIN" | Site == "MTDA" | Site == "GGHP" ~ "Glen",
+    Site == "SFGC" | Site == "OLYM" | Site == "LAKE" | Site == "FTFU" ~ "Merced",
+    Site == "BVP" | Site == "CHP" ~ "Corona",
+    Site == "TGPH" | Site == "HYDE" | Site == "FORT" ~ "Coit",
+    Site == "GGPE" ~ "GGP - East",
+    Site == "GGPW" | Site == "GGP" ~ "GGP - West",
+    Site == "LEND" | Site == "LAFY" ~ "Land's End",
+    Site == "MCLA" ~ "McLaren",
+    Site == "PRES" ~ "Presidio",
+    Site == "STFA" ~ "St. Francis",
+    Site == "SUNS" ~ "Sunset Res",
+    Site == "STGV" ~ "Stern Grove")) %>% 
+  
+  # Add biological seasons
+  mutate(Biol.Season = case_when(
+    Month == 3 | Month == 4 | Month == 5 | Month == 6 ~ "Pupping",
+    Month == 7 | Month == 8 | Month == 9 | Month == 10 ~ "Dispersal",
+    Month == 11 | Month == 12 | Month == 1 | Month == 2 ~ "Mating")) %>% 
+  
+  # Remove territories with low sample size
+  filter(Territory != "Sunset Res" & Territory != "Stern Grove") %>%
+  
+  # Select only relevant columns
+  select(c(SampleID, Biol.Season, Territory, Category, Individual)) %>%
+  
+  # Only retain metadata for samples in the final diet data frame
+  inner_join(sample_list, by = "SampleID")
+```
+
+## Calculate dissimilarity matrix
+
+Turn data frame into matrix:
+
+```{r}
+# Filter out samples from diet matrix that are not in the metadata
+sp.RRA.filt <- left_join(metadata, sp.RRA, by = "SampleID")
+
+names.filt <- sp.RRA.filt %>% select(SampleID) # create list of sample names
+
+sp.RRA <- sp.RRA.filt %>% 
+  select(-c(SampleID:Individual)) %>% 
+  as.matrix
+
+sp.FOO.filt <- left_join(metadata, sp.FOO, by = "SampleID")
+
+sp.FOO <- sp.FOO.filt %>% 
+  select(-c(SampleID:Individual)) %>% 
+  as.matrix
+
+# Add rownames
+rownames(sp.RRA) <- names.filt$SampleID
+rownames(sp.FOO) <- names.filt$SampleID
+```
+
+Calculate dissimilarity matrices:
+
+```{r}
+dist.sp.RRA <- vegdist(sp.RRA, method="bray")
+dist.sp.FOO <- vegdist(sp.FOO, method="jaccard")
+```
+
+## Build models and run adonis2
+
+```{r}
+set.seed(1995)
+permutations <- 999
+
+
+# RRA
+mod.all.RRA <- adonis2(dist.sp.RRA ~  Biol.Season + Territory,
+                   data=metadata, permutations = permutations,
+                   method="bray", by = "margin")
+mod.all.RRA
+
+# FOO
+mod.all.FOO <- adonis2(dist.sp.FOO ~  Biol.Season + Territory,
+                   data=metadata, permutations = permutations,
+                   method="bray", by = "margin")
+
+mod.all.FOO
+```
+
+## Pairwise comparisons of group means
+
+Using a Benjamini-Hochberg p-value correction and running pairwise comparisons with pairwise.adnois from the package pairwiseAdonis.
+
+```{r}
+# Biological season pairwise comparisons
+all.season.pairwise.RRA <- pairwise.adonis(x = dist.sp.RRA, factors = metadata$Biol.Season, p.adjust.m = "BH", perm = permutations)
+
+all.season.pariwise.FOO <- pairwise.adonis(x = dist.sp.FOO, factors = metadata$Biol.Season, p.adjust.m= "BH", perm = permutations)
+
+all.season.pairwise.RRA # 3 out of 3 are significantly different
+all.season.pariwise.FOO # 3 out of 3 are significantly different
+
+# Territory pairwise comparisons
+all.terr.pairwise.RRA <- as.data.frame(pairwise.adonis(x = dist.sp.RRA, factors = metadata$Territory, p.adjust.m = "BH", perm = permutations))
+
+all.terr.pairwise.FOO <- as.data.frame(pairwise.adonis(x = dist.sp.FOO, factors = metadata$Territory, p.adjust.m = "BH", perm = permutations))
+
+table(all.terr.pairwise.RRA$sig != "") # 33 out of 55 comparisons are significantly different
+table(all.terr.pairwise.FOO$sig != "") # 41 out of 55 comparisons are significantly different
+```
+
+## Testing for dispersion
+
+When there are significant differences in dispersion, this can lead to false conclusions that group means are also different, when the difference may actually be attributed heterogeneity in dispersion.
+
+```{r}
+# Biological season betadisper
+disp.season.RRA <- betadisper(dist.sp.RRA, metadata$Biol.Season)
+disp.season.FOO <- betadisper(dist.sp.FOO, metadata$Biol.Season)
+
+permutest(disp.season.RRA, pairwise=F) # significantly diff dispersion
+permutest(disp.season.FOO, pairwise=F) # significantly diff dispersion
+
+# Biological season comparison of group dispersions
+pairwise.disp.season <- permutest(disp.season.RRA, pairwise=T)
+pairwise.disp.season <- pairwise.disp.season$pairwise$permuted # extract p-values
+pairwise.disp.season.pvals <- p.adjust(pairwise.disp.season, method="BH")# apply BH correction
+table(pairwise.disp.season.pvals <= 0.05) # 2 out of 3 comparisons have different dispersion
+
+pairwise.disp.season.FOO <- permutest(disp.season.FOO, pairwise=T)
+pairwise.disp.season.FOO <- pairwise.disp.season.FOO$pairwise$permuted
+pairwise.disp.season.FOO.pvals <- p.adjust(pairwise.disp.season.FOO, method="BH")
+table(pairwise.disp.season.FOO.pvals <= 0.05) # 2 out of 3 comparisons have different dispersion
+
+
+# Territory betadisper
+disp.terr.RRA <- betadisper(dist.sp.RRA, metadata$Territory)
+disp.terr.FOO <- betadisper(dist.sp.FOO, metadata$Territory)
+
+permutest(disp.terr.RRA, pairwise=F) # significantly diff dispersion
+permutest(disp.terr.FOO, pairwise=F) # significantly diff dispersion
+
+# Territory comparison of group dispersions
+pairwise.disp.terr <- permutest(disp.terr.RRA, pairwise=T)
+pairwise.disp.terr <- pairwise.disp.terr$pairwise$permuted
+pairwise.disp.terr.pvals <- p.adjust(pairwise.disp.terr, method="BH")
+table(pairwise.disp.terr.pvals <= 0.05) # 16/55 comparisons have different dispersion
+
+pairwise.disp.terr.FOO <- permutest(disp.terr.FOO, pairwise=T)
+pairwise.disp.terr.FOO <- pairwise.disp.terr.FOO$pairwise$permuted
+pairwise.disp.terr.FOO.pvals <- p.adjust(pairwise.disp.terr.FOO, method="BH")
+table(pairwise.disp.terr.FOO.pvals <= 0.05)# 4/55 comparisons have diff dispersion
+```
+
+# Genotyped samples
+
+Because not all scats yielded genotypes, and some samples came from the same individual, we verified that significant PERMANOVA results were not an artifact of pseudoreplication by conducting 1,000 trials in which we randomly sampled a single scat per individual (n = 111 total individuals).
+
+To do this, we select only samples that have genotypes, sample one observation per individual, and re-run the PERMANOVA models. We repeat this process 1,000 times and then calculate average R2 values and the proportion of p-values that are significant for each covariate.
+
+## Prepare data
+
+```{r}
+# Load diet data
+sp.RRA <- read.csv("Filtering-and-QC/sp.RRA.clean.csv") %>% select(-c(X))
+sp.FOO <- read.csv("Filtering-and-QC/sp.FOO.clean.csv") %>% select(-c(X))
+
+# Make sample list
+sample_list <- sp.RRA %>% select(SampleID)
+
+# Load metadata, add territories, seasons, filter out transient territories and Sunset Reservoir, and select relevant columns
+metadata.geno <- read.csv("Filtering-and-QC/All_Metadata.csv") %>% 
+  
+  # Add territories 
+  mutate(Territory = case_when(
+    Site == "BERN" | Site == "STMA" ~ "Bernal",
+    Site == "GLEN" | Site == "LAGU" | Site == "TWIN" | Site == "MTDA" | Site == "GGHP" ~ "Glen",
+    Site == "SFGC" | Site == "OLYM" | Site == "LAKE" | Site == "FTFU" ~ "Merced",
+    Site == "BVP" | Site == "CHP" ~ "Corona",
+    Site == "TGPH" | Site == "HYDE" | Site == "FORT" ~ "Coit",
+    Site == "GGPE" ~ "GGP - East",
+    Site == "GGPW" | Site == "GGP" ~ "GGP - West",
+    Site == "LEND" | Site == "LAFY" ~ "Land's End",
+    Site == "MCLA" ~ "McLaren",
+    Site == "PRES" ~ "Presidio",
+    Site == "STFA" ~ "St. Francis",
+    Site == "SUNS" ~ "Sunset Res",
+    Site == "STGV" ~ "Stern Grove")) %>% 
+  
+  # Add biological seasons
+  mutate(Biol.Season = case_when(
+    Month == 3 | Month == 4 | Month == 5 | Month == 6 ~ "Pupping",
+    Month == 7 | Month == 8 | Month == 9 | Month == 10 ~ "Dispersal",
+    Month == 11 | Month == 12 | Month == 1 | Month == 2 ~ "Mating")) %>% 
+  
+  # Remove territories with low sample size
+  filter(Territory != "Sunset Res" & Territory != "Stern Grove") %>%
+  
+  # Keep only individuals with genotypes
+  filter(Category == "SFCoy") %>% 
+  
+  # Select only relevant columns
+  select(c(SampleID, Biol.Season, Territory, Individual)) %>%
+  
+  # Only retain metadata for samples in the final diet data frame
+  inner_join(sample_list, by = "SampleID") %>% 
+  
+  # Make covarariates factors
+  mutate(Biol.Season = as.factor(Biol.Season),
+         Territory = as.factor(Territory),
+         Individual = as.factor(Individual))
+```
+
+## Write function to sample data frame, prepare matrix, and run adonis2
+
+Sample the genotype data frame such that each individual has one observation, generate a disimilarity matrix and run the model. Repeat the function as specified by the number of iterations, in this case 1,000. Then, write the results of all the models into a list. Pull out the p-values for each covariate, apply a p-value adjustment, and consider the results. I might want to include an excel table with all the tests as a supplementary file.
+
+### RRA
+
+Subsample down to one observation per individual and run adonis2 1000 times:
+
+```{r}
+# Set seed
+set.seed(4)
+
+# Set the number of iterations and permutations
+num_iterations <- 1000
+permutations = 999
+
+# Define a list of model formulas
+formulas <- list(
+  formula1 = dist.RRA.geno ~ Biol.Season + Territory)
+
+# Create a vector of by values corresponding to the formulas
+by_values <- c("margin")
+
+# Create an empty list to store model results and dissimilarity matrices
+results_list <- vector("list", length = num_iterations)
+
+# Perform the iterations
+for (i in 1:num_iterations) {
+  
+  # Sample 1 observation per individual
+  sampled_data <- metadata.geno %>%
+    group_by(Individual) %>%
+    sample_n(size = 1, replace = TRUE) %>%
+    ungroup()
+
+# Prepare and calculate dissimilarity matrix
+  geno.RRA.sampled <- sampled_data %>% left_join(sp.RRA, by = "SampleID")
+
+  names.geno.sampled <- geno.RRA.sampled %>% select(SampleID)
+  
+  sp.RRA.geno <- geno.RRA.sampled %>% 
+  select(-c(SampleID:Year)) %>% 
+  as.matrix
+  
+  # Add rownames
+  rownames(sp.RRA.geno) <- names.geno.sampled$SampleID
+  
+  # Calculate dissimilarity
+  dist.RRA.geno <- vegdist(sp.RRA.geno, method="bray")
+  
+# Run adonis2 on the sampled data for each model formula
+  model_results <- lapply(1:length(formulas), function(j) {
+    adonis_result <- adonis2(formulas[[j]], data = sampled_data, method="bray",
+                             permutations=permutations, by = by_values[j])
+    adonis_result
+    })
+
+# Store the model results in the list
+  results_list[[i]] <- model_results
+}
+```
+
+The piece of code above takes a long time to run. The model output is saved and can be loaded to save time:
+
+```{r}
+# Load results list if not re-running code above
+results_list <- readRDS("PERMANOVA/PERMANOVA_sample_RRA.rds")
+```
+
+Summarize results:
+
+```{r}
+# Create an empty data frame to store the results
+result_df <- data.frame(
+  Trial = numeric(),
+  Covariate = character(),
+  F = numeric(),
+  R2 = numeric(),
+  P_value = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Iterate through the results_list
+for (i in seq_along(results_list)) {
+  # Extract relevant information from each model output
+  adonis_result <- results_list[[i]][[1]]
+
+  # Extract values from the model output
+  for (row_index in 1:2) {
+  trial <- i
+  covariate <- rownames(adonis_result)[row_index]  # Assuming the first row corresponds to Biol.Season
+  F_value <- adonis_result$F[row_index]
+  R2_value <- adonis_result$R2[row_index]
+  p_value <- adonis_result$"Pr(>F)"[row_index]
+
+  # Create a dataframe with the extracted values
+  result_df <- rbind(result_df, c(trial, covariate, F_value, R2_value,
+                                  p_value))
+  # Rename columns in result_df
+  colnames(result_df) <- c("Trial", "Covariate", "F", "R2", "Pr(>F)")
+  
+  # Change chr to numeric
+  result_df <- result_df %>%
+     mutate_at(vars(F, R2, `Pr(>F)`), as.numeric)
+  }
+}
+
+# Save result to table (optional)
+#write.csv(result_df, "PERMANOVA/PERMANOVA_sample_RRA.csv")
+
+# Calculate average R2 value and proportion of p-values <= 0.05 for each covariate
+summary_RRA <- result_df %>%
+  group_by(Covariate) %>% 
+  summarize(
+    Mean_R2 = mean(R2),
+    Count_Total = n(),
+    Count_Sig_0.05 = sum(`Pr(>F)` <= 0.05),
+    Count_Sig_0.1 = sum(`Pr(>F)` <= 0.1),
+    Prop_Sig_0.05 = Count_Sig_0.05 / Count_Total,
+    Prop_Sig_0.1 = Count_Sig_0.1 / Count_Total
+  )
+
+summary_RRA
+```
+
+### FOO
+
+Subsample down to one observation per individual and run adonis2 1000 times:
+
+```{r}
+# Set seed
+set.seed(4)
+
+# Set the number of iterations and permutations
+num_iterations <- 1000
+permutations = 999
+
+# Define a list of different formulas for your four models
+formulas_FOO <- list(
+  formula1 = dist.FOO.geno ~ Biol.Season + Territory)
+
+# Create a vector of by values corresponding to the formulas
+by_values <- c("margin")
+
+# Create an empty list to store model results and dissimilarity matrices
+results_list_FOO <- vector("list", length = num_iterations)
+
+# Perform the iterations
+for (i in 1:num_iterations) {
+  
+  # Sample 1 observation per individual
+  sampled_data <- metadata.geno %>%
+    group_by(Individual) %>%
+    sample_n(size = 1, replace = TRUE) %>%
+    ungroup()
+
+# Prepare and calculate dissimilarity matrix
+  geno.FOO.sampled <- sampled_data %>% left_join(sp.FOO, by = "SampleID")
+
+  names.geno.FOO.sampled <- geno.FOO.sampled %>% select(SampleID)
+  
+  sp.FOO.geno <- geno.FOO.sampled %>% 
+  select(-c(SampleID:Year)) %>% 
+  as.matrix
+  
+  # Add rownames
+  rownames(sp.FOO.geno) <- names.geno.FOO.sampled$SampleID
+  
+  # Calculate dissimilarity
+  dist.FOO.geno <- vegdist(sp.FOO.geno, method="jaccard")
+  
+# Run adonis2 on the sampled data for each model formula
+  model_results_FOO <- lapply(1:length(formulas_FOO), function(j) {
+    adonis_result_FOO <- adonis2(formulas_FOO[[j]], data = sampled_data, method="jaccard", permutations=permutations, by = by_values[j])
+    adonis_result_FOO
+    })
+
+# Store the model results in the list
+  results_list_FOO[[i]] <- model_results_FOO
+}
+```
+
+The piece of code above takes a long time to run. The model output is saved and can be loaded to save time:
+
+```{r}
+# Load results list if not re-running code above
+results_list_FOO <- readRDS("PERMANOVA/PERMANOVA_sample_FOO.rds")
+```
+
+Summarize results:
+
+```{r}
+# Create an empty dataframe to store the results
+result_df_FOO <- data.frame(
+  Trial = numeric(),
+  Covariate = character(),
+  F = numeric(),
+  R2 = numeric(),
+  P_value = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Iterate through the results_list
+for (i in seq_along(results_list_FOO)) {
+  # Extract relevant information from each model output
+  adonis_result_FOO <- results_list_FOO[[i]][[1]]
+
+  # Extract values from the model output
+  for (row_index in 1:2) {
+  trial <- i
+  covariate <- rownames(adonis_result_FOO)[row_index]
+  F_value <- adonis_result_FOO$F[row_index]
+  R2_value <- adonis_result_FOO$R2[row_index]
+  p_value <- adonis_result_FOO$"Pr(>F)"[row_index]
+
+  # Create a dataframe with the extracted values
+  result_df_FOO <- rbind(result_df_FOO, c(trial, covariate, F_value, R2_value,
+                                  p_value))
+  
+  # Rename columns in result_df
+  colnames(result_df_FOO) <- c("Trial", "Covariate", "F", "R2", "Pr(>F)")
+  
+  # Change chr to numeric
+  result_df_FOO <- result_df_FOO %>%
+     mutate_at(vars(F, R2, `Pr(>F)`), as.numeric)
+  }
+}
+
+# Save result to table (optional)
+#write.csv(result_df_FOO, "PERMANOVA/PERMANOVA_sample_FOO.csv")
+
+# Calculate average R2 value and proportion of p-values <= 0.05 for each covariate
+summary_FOO <- result_df_FOO %>%
+  group_by(Covariate) %>% 
+  summarize(
+    Mean_R2 = mean(R2),
+    Count_Total = n(),
+    Count_Sig_0.05 = sum(`Pr(>F)` <= 0.05),
+    Count_Sig_0.1 = sum(`Pr(>F)` <= 0.1),
+    Prop_Sig_0.05 = Count_Sig_0.05 / Count_Total,
+    Prop_Sig_0.1 = Count_Sig_0.1 / Count_Total
+  )
+
+summary_FOO
+```
+
+# Individual-level samples
+
+Because we were interested in individual dietary variation, we investigated differences in diet at the individual level by comparing the most frequently sampled coyotes (≥8 scats) with high sample coverage. In this test, we included individual nested within family group as the main predictor and used a sequential (Type I) sum of squares with the BiodiversityR package.
+
+## Prepare data
+
+```{r}
+# Load diet data
+sp.RRA <- read.csv("Filtering-and-QC/sp.RRA.clean.csv") %>% select(-c(X))
+sp.FOO <- read.csv("Filtering-and-QC/sp.FOO.clean.csv") %>% select(-c(X))
+
+# Make sample list column
+sample_list <- sp.RRA %>% select(SampleID)
+
+# Load individual family group assignments
+ids <- read.csv("Diet-Plots/IDs.csv")
+
+# Make metadata column for only coyotes with 8 or more scats
+metadata.ind <- read.csv("Filtering-and-QC/All_Metadata.csv") %>%  
+  
+  # Remove non-genotyped coyotes
+  filter(Category == "SFCoy") %>% 
+  
+  # select only relevant columns
+  select(c(SampleID, Individual)) %>%
+  
+  # Only keep metadata for samples in the final diet data frame
+  inner_join(sample_list, by = "SampleID") %>% 
+  
+  # Add counts per individual
+  add_count(Individual) %>% 
+  
+  # Add family group assignments
+  left_join(ids, by = "Individual") %>% 
+  
+  # Filter coyotes with fewer than 8 scats
+  filter(n >= 8) %>% 
+  
+  # Make character columns into factors
+  mutate_if(is.character, as.factor)
+```
+
+## Calculate dissimilarity
+
+```{r}
+# Filter out samples from diet matrix that are not in the metadata
+sp.RRA.filt.ind <- left_join(metadata.ind, sp.RRA, by = "SampleID")
+sp.FOO.filt.ind <- left_join(metadata.ind, sp.FOO, by = "SampleID")
+
+names.filt.ind.RRA <- sp.RRA.filt.ind %>% select(SampleID)
+names.filt.ind.FOO <- sp.FOO.filt.ind %>% select(SampleID)
+
+sp.RRA.ind <- sp.RRA.filt.ind %>% 
+  select(-c(SampleID:Family.Group)) %>% 
+  as.matrix
+
+sp.FOO.ind <- sp.FOO.filt.ind %>% 
+  select(-c(SampleID:Family.Group)) %>% 
+  as.matrix
+
+# Add rownames
+rownames(sp.RRA.ind) <- names.filt.ind.RRA$SampleID
+rownames(sp.FOO.ind) <- names.filt.ind.FOO$SampleID
+
+# Calculate dissimilarity
+dist.sp.RRA.ind <- vegdist(sp.RRA.ind, method="bray")
+dist.sp.FOO.ind <- vegdist(sp.FOO.ind, method="jaccard")
+```
+
+## Build models and run adonis2
+
+The sequential analysis offered by the Type I approach is appropriate for fully nested hierarchical models, for which there exists a natural ordering of the terms. In this case individual ID is nested with family group.
+
+```{r}
+set.seed(666)
+permutations <- 999
+
+# RRA
+mod.nested.RRA <- nested.npmanova(dist.sp.RRA.ind ~ Family.Group + Individual,
+                                data=metadata.ind, permutations=permutations, 
+                                method="bray")
+
+mod.nested.RRA 
+
+# Calculate R2 of family group
+mod.nested.RRA$SumsofSquares[1] / sum(mod.nested.RRA$SumsofSquares)
+
+# Calculate R2 for individual ID
+mod.nested.RRA$SumsofSquares[2] / sum(mod.nested.RRA$SumsofSquares)
+
+# FOO
+mod.nested.FOO <- nested.npmanova(dist.sp.FOO.ind ~ Family.Group + Individual,
+                        data=metadata.ind, permutations=permutations,
+                        method="jaccard")
+
+mod.nested.FOO
+
+# Calculate R2 of family group
+mod.nested.FOO$SumsofSquares[1] / sum(mod.nested.FOO$SumsofSquares)
+
+# Calculate R2 for individual ID
+mod.nested.FOO$SumsofSquares[2] / sum(mod.nested.FOO$SumsofSquares)
+```
+
+## Pairwise comparisons of group means
+
+```{r}
+# Individuals
+set.seed(4)
+ind.pvals.BH <- pairwise.adonis(x = dist.sp.RRA.ind, factors = metadata.ind$Individual, p.adjust.m = "BH", perm = permutations)
+
+table(ind.pvals.BH$sig != "") #94/231 had sig p values with the BH correction
+
+set.seed(2)
+ind.pvals.BH.FOO <- pairwise.adonis(x = dist.sp.FOO.ind, factors = metadata.ind$Individual, p.adjust.m = "BH", perm = permutations)
+
+table(ind.pvals.BH.FOO$sig != "") #118/231 had sig p values with the BH correction
+
+
+# Family Groups
+set.seed(1995)
+ind.pvals.BH.terr <- pairwise.adonis(x = dist.sp.RRA.ind, factors = metadata.ind$Family.Group, p.adjust.m = "BH", perm = permutations)
+
+table(ind.pvals.BH.terr$sig != "") # 19/36 had sig p values with the BH correction
+
+set.seed(1995)
+ind.pvals.BH.terr.FOO <- pairwise.adonis(x = dist.sp.FOO.ind, factors = metadata.ind$Family.Group, p.adjust.m = "BH", perm = permutations)
+
+table(ind.pvals.BH.terr.FOO$sig != "") # 22/36 had sig p values with the BH
+```
+
+## Testing for dispersion
+
+```{r}
+# Individuals betadisper
+disp.ind.RRA <- betadisper(dist.sp.RRA.ind, metadata.ind$Individual)
+set.seed(4)
+permutest(disp.ind.RRA, pairwise=F) # significantly diff dispersion
+
+disp.ind.FOO <- betadisper(dist.sp.FOO.ind, metadata.ind$Individual)
+set.seed(4)
+permutest(disp.ind.FOO, pairwise=F) # not significantly diff dispersion for FOO
+
+# Individuals comparison of group dispersions
+disp.pairwise.ind <- permutest(disp.ind.RRA, pairwise=T)
+disp.pairwise.ind <- disp.pairwise.ind$pairwise$permuted # extract p-vals
+disp.pairwise.ind.pvals <- p.adjust(disp.pairwise.ind, method="BH") # apply BH correction
+table(disp.pairwise.ind.pvals <= 0.05) # only 13 out of 231 comparisons had significantly different dispersion
+
+
+# Family groups betadisper
+disp.fam <- betadisper(dist.sp.RRA.ind, metadata.ind$Family.Group)
+set.seed(1)
+permutest(disp.fam, pairwise=F) # significantly diff dispersion
+
+disp.fam.FOO <- betadisper(dist.sp.FOO.ind, metadata.ind$Family.Group)
+set.seed(1)
+permutest(disp.fam.FOO, pairwise=F) # significantly diff dispersion
+
+# Family group comparison of group dispersions
+set.seed(1)
+disp.pairwise.fam <- permutest(disp.fam, pairwise=T) 
+disp.pairwise.fam <- disp.pairwise.fam$pairwise$permuted
+disp.pairwise.fam.pvals <- p.adjust(disp.pairwise.fam, method="BH") 
+table(disp.pairwise.fam.pvals <= 0.05) # 6 out of 36 comparisons have significantly different dispersion
+
+set.seed(10)
+disp.pairwise.fam.FOO <- permutest(disp.fam.FOO, pairwise=T)
+disp.pairwise.fam.FOO <- disp.pairwise.fam.FOO$pairwise$permuted
+disp.pairwise.fam.FOO.pvals <- p.adjust(disp.pairwise.fam.FOO, method="BH")
+table(disp.pairwise.fam.FOO.pvals <= 0.05) # 3 out of 36 comparisons have significantly different dispersion
+```
