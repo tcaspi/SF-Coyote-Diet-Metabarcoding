@@ -261,9 +261,6 @@ Sample the genotype data frame such that each individual has one observation, ge
 Subsample down to one observation per individual and run adonis2 1000 times:
 
 ```{r}
-# Set seed
-set.seed(4)
-
 # Set the number of iterations and permutations
 num_iterations <- 1000
 permutations = 999
@@ -277,6 +274,9 @@ by_values <- c("margin")
 
 # Create an empty list to store model results and dissimilarity matrices
 results_list <- vector("list", length = num_iterations)
+
+# Set seed
+set.seed(4)
 
 # Perform the iterations
 for (i in 1:num_iterations) {
@@ -293,7 +293,7 @@ for (i in 1:num_iterations) {
   names.geno.sampled <- geno.RRA.sampled %>% select(SampleID)
   
   sp.RRA.geno <- geno.RRA.sampled %>% 
-  select(-c(SampleID:Year)) %>% 
+  select(-c(SampleID:Individual)) %>% 
   as.matrix
   
   # Add rownames
@@ -360,7 +360,7 @@ for (i in seq_along(results_list)) {
 }
 
 # Save result to table (optional)
-#write.csv(result_df, "PERMANOVA/PERMANOVA_sample_RRA.csv")
+#write.csv(result_df, "PERMANOVA/Table_S4.csv")
 
 # Calculate average R2 value and proportion of p-values <= 0.05 for each covariate
 summary_RRA <- result_df %>%
@@ -382,13 +382,6 @@ summary_RRA
 Subsample down to one observation per individual and run adonis2 1000 times:
 
 ```{r}
-# Set seed
-set.seed(4)
-
-# Set the number of iterations and permutations
-num_iterations <- 1000
-permutations = 999
-
 # Define a list of different formulas for your four models
 formulas_FOO <- list(
   formula1 = dist.FOO.geno ~ Biol.Season + Territory)
@@ -398,6 +391,9 @@ by_values <- c("margin")
 
 # Create an empty list to store model results and dissimilarity matrices
 results_list_FOO <- vector("list", length = num_iterations)
+
+# Set seed
+set.seed(4)
 
 # Perform the iterations
 for (i in 1:num_iterations) {
@@ -414,7 +410,7 @@ for (i in 1:num_iterations) {
   names.geno.FOO.sampled <- geno.FOO.sampled %>% select(SampleID)
   
   sp.FOO.geno <- geno.FOO.sampled %>% 
-  select(-c(SampleID:Year)) %>% 
+  select(-c(SampleID:Individual)) %>% 
   as.matrix
   
   # Add rownames
@@ -481,7 +477,7 @@ for (i in seq_along(results_list_FOO)) {
 }
 
 # Save result to table (optional)
-#write.csv(result_df_FOO, "PERMANOVA/PERMANOVA_sample_FOO.csv")
+#write.csv(result_df_FOO, "PERMANOVA/Table_S3.csv")
 
 # Calculate average R2 value and proportion of p-values <= 0.05 for each covariate
 summary_FOO <- result_df_FOO %>%
