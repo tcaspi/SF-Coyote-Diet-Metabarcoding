@@ -1,0 +1,356 @@
+---
+title: "Diet-Specialization"
+author: "Tali Caspi"
+date: "2024-11-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(RInSp)
+library(bayestestR)
+```
+
+# All data
+
+Assuming each scat comes from a DIFFERENT individual - which we know is incorrect. Given that there are 707 samples but only 111 individuals, I don't think this is an appropriate way to calculate individual specialization in the population.
+
+## Prepare data
+
+```{r}
+# Load diet data
+sp.RRA <- read.csv("Filtering-and-QC/sp.RRA.clean.csv") %>% select(-c(X))
+sp.FOO <- read.csv("Filtering-and-QC/sp.FOO.clean.csv") %>% select(-c(X))
+rawseqs.clean <- read.csv("Filtering-and-QC/raw.seqs.clean.csv") %>% select(-c(X))
+
+# Make sample list
+sample_list <- rawseqs.clean %>% select(SampleID)
+
+# Load metadata, add territories, seasons, and select relevant columns
+metadata <- read.csv("Filtering-and-QC/All_Metadata.csv") %>% 
+  
+  # Add territories 
+  mutate(Territory = case_when(
+    Site == "BERN" | Site == "STMA" ~ "Bernal",
+    Site == "GLEN" | Site == "LAGU" | Site == "TWIN" | Site == "MTDA" | Site == "GGHP" ~ "Glen",
+    Site == "SFGC" | Site == "OLYM" | Site == "LAKE" | Site == "FTFU" ~ "Merced",
+    Site == "BVP" | Site == "CHP" ~ "Corona",
+    Site == "TGPH" | Site == "HYDE" | Site == "FORT" ~ "Coit",
+    Site == "GGPE" ~ "GGP - East",
+    Site == "GGPW" | Site == "GGP" ~ "GGP - West",
+    Site == "LEND" | Site == "LAFY" ~ "Land's End",
+    Site == "MCLA" ~ "McLaren",
+    Site == "PRES" ~ "Presidio",
+    Site == "STFA" ~ "St. Francis",
+    Site == "SUNS" ~ "Sunset Res",
+    Site == "STGV" ~ "Stern Grove")) %>% 
+  
+  # Add biological seasons
+  mutate(Biol.Season = case_when(
+    Month == 3 | Month == 4 | Month == 5 | Month == 6 ~ "Pupping",
+    Month == 7 | Month == 8 | Month == 9 | Month == 10 ~ "Dispersal",
+    Month == 11 | Month == 12 | Month == 1 | Month == 2 ~ "Mating")) %>% 
+  
+  # Select only relevant columns
+  select(c(SampleID, Biol.Season, Territory, Category, Individual)) %>%
+  
+  # Only retain metadata for samples in the final diet data frame
+  inner_join(sample_list, by = "SampleID") %>% 
+  
+  # Turn character columns to factors
+  mutate(Biol.Season = as.factor(Biol.Season),
+         Territory = as.factor(Territory),
+         Category = as.factor(Category),
+         Individual = as.factor(Individual))
+
+# Merge to diet data and make columns of numbered sample IDs
+all_samples <- inner_join(metadata, rawseqs.clean, by="SampleID") %>% 
+  mutate(ID = seq(1,nrow(.))) %>% 
+  relocate(ID, .before=SampleID) %>% 
+  mutate(SampleID = as.factor(SampleID)) %>% 
+  select(1,7:65) %>% 
+  mutate(across(where(is.numeric), as.double))
+
+all_samples_RRA <- inner_join(metadata, sp.RRA, by="SampleID") %>% 
+  mutate(ID = seq(1,nrow(.))) %>% 
+  relocate(ID, .before=SampleID) %>% 
+  mutate(SampleID = as.factor(SampleID)) %>% 
+  select(1,7:65) %>% 
+  mutate(across(where(is.numeric), as.double))
+
+# Examine sample counts
+nrow(all_samples) #707 total samples
+table(all_samples$Category)#525 samples with genotypes
+
+#create RInSp object
+rinsp_allsamples = import.RInSp(all_samples, row.names = 1, data.type = "integer")
+rinsp_allsamples_RRA = import.RInSp(all_samples_RRA, row.names = 1, data.type = "proportion")
+
+
+#Calculate Roughgarden's indices based on sequence reads, converting individual diets into proportions pik, then averaging these proportions for each resource k.
+WT_allsamples = WTdMC(rinsp_allsamples, replicates = 999, pop.diet = "average")
+saveRDS(WT_allsamples, "RInSp/WTdMC_allsamples.rds")
+
+# Calculate the proportional similarity index (PSi)
+PSi_allsamples = PSicalc(dataset, pop.diet = "average", exclude = FALSE, replicates=999, precision = 1e-9)
+
+# Calculate index E and Cws using proportion data
+Eindex_allsample = Eindex(rinsp_allsamples_RRA, index = "saramaki", jackknife = FALSE, precision = 1e-9)
+saveRDS(Eindex_allsample, "RInSp/Eindex_allsamples.rds")
+```
+
+# Including all scats with genotypes
+
+## Subsampling approach using sequence reads and proportions
+
+Using a data frame containing sequence reads per diet item (integer data), randomly subsample the dataset so that there is a single scat per individual. Then, calculate WIC/TNW and PSi values and associate p-values. Iterate this process 1,000 times and calculate an means specialization indices with associated confidence intervals as well as the proportion of p-values that are significant. Use pop.diet = "average" to ensure that individual diets are first converted into proportions, and only then are these proportions averaged for each resource.
+
+```{r}
+# Prepare sequence read data set 
+geno_samples <- inner_join(metadata, rawseqs.clean, by="SampleID") %>% 
+  filter(Category == "SFCoy")
+
+# Randomly sample one scat per individual
+sampled_data <- geno_samples %>% 
+    group_by(Individual) %>%
+    sample_n(size = 1, replace = FALSE) %>%
+    ungroup() %>% 
+   mutate(ID = seq(1,nrow(.))) %>% 
+    relocate(ID, .before=SampleID) %>% 
+    as.data.frame()
+
+# Create RInSp object
+rinsp_geno_subsamples = import.RInSp(sampled_data, row.names = 1, data.type = "integer", info.cols = c(2:5))
+
+# Calculate WIC/TNW
+WT_geno_subsamples = WTdMC(rinsp_geno_subsamples, replicates = 999, pop.diet = "average")
+WT_geno_subsamples$WonT 
+WT_geno_subsamples$p.value
+
+# Calculate the proportional similarity index (PSi)
+PSi_geno_subsamples = PSicalc(rinsp_geno_subsamples, pop.diet = "average", exclude = FALSE, replicates=999, precision = 1e-9)
+PSi_geno_subsamples$IS
+PSi_geno_subsamples$IS.pvalue
+```
+
+
+Conduct 1,000 iterations. This process takes a long time to run, so results are saved and stored under the file name: ______.
+
+```{r}
+# Set up vectors to store results
+wonT_values <- numeric(100)
+wonT_pvalues <- numeric(100)
+IS_values <- numeric(100)
+IS_pvalues <- numeric(100)
+
+# Run the sampling and calculation 100 times
+for (i in 1:100) {
+  # Sample one scat per individual
+  sampled_data <- geno_samples %>% 
+    group_by(Individual) %>%
+    sample_n(size = 1, replace = FALSE) %>%
+    ungroup() %>% 
+    mutate(ID = seq(1, nrow(.))) %>% 
+    relocate(ID, .before = SampleID) %>% 
+    as.data.frame()
+  
+  # Create RInSp object
+  rinsp_geno_subsamples <- import.RInSp(sampled_data, row.names = 1, data.type = "integer",
+                                        info.cols = c(2:5))
+  
+  # Calculate WIC/TNW
+  WT_geno_subsamples <- WTdMC(rinsp_geno_subsamples, replicates = 999, pop.diet = "average",
+                              print.ris = FALSE)
+  wonT_values[i] <- WT_geno_subsamples$WonT
+  wonT_pvalues[i] <- WT_geno_subsamples$p.value
+  
+  # Calculate the Proportional Similarity index (PSi)
+  PSi_geno_subsamples <- PSicalc(rinsp_geno_subsamples, pop.diet = "average", 
+                                 exclude = TRUE, replicates = 999, precision = 1e-9)
+  IS_values[i] <- PSi_geno_subsamples$IS
+  IS_pvalues[i] <- PSi_geno_subsamples$IS.pvalue
+}
+
+# Save model output
+# saveRDS()
+
+# Calculate mean and 95% credible intervals for WonT and IS
+mean_wonT <- mean(wonT_values)
+mean_IS <- mean(IS_values)
+ci_wonT <- ci(wonT_values, ci = 0.95)
+ci_IS <- ci(IS_values, ci = 0.95)
+
+# Calculate the proportion of p-values < 0.05 for WonT and IS
+prop_wonT_pval <- mean(wonT_pvalues < 0.05) ## IS THIS CORRECT?
+prop_IS_pval <- mean(IS_pvalues < 0.05)
+
+# Summary of results
+summary_results <- data.frame(
+  Metric = c("WonT", "IS"),
+  Mean = c(mean_wonT, mean_IS),
+  CI_lower = c(ci_wonT$CI_low, ci_IS$CI_low),
+  CI_upper = c(ci_wonT$CI_high, ci_IS$CI_high),
+  Pval_below_0.05 = c(prop_wonT_pval, prop_IS_pval))
+```
+
+## Integrative approach averaging across all samples per individual
+
+To avoid throwing away data, an alternative approach involves utilizing all scats collected per individual. However, RInSp requires that each row represent an individual, not a sample. Accordingly, the code below calculates the average relative read abundance per species per individual. To transform these means into integers, the means are then multiplied by 1,000 and rounded to the nearest whole number. This ensures that integer data created reflect the RRA proportions ascribed to each individual. Once again, pop.diet = "average" is used to ensure that individual diets are first converted into proportions and only then are those proportions averaged for each resource to calculate the population-level diet.
+
+```{R}
+# Create dataframe of averaged RRA values per individual and multiple/round this mean by 1000
+geno_RRA <- inner_join(metadata, sp.RRA, by = "SampleID") %>% 
+  filter(Category == "SFCoy") %>% 
+  group_by(Individual) %>% 
+  summarize(across(where(is.numeric), ~ round(mean(.) * 1000)))  %>% 
+  mutate(ID = seq(1, nrow(.))) %>% 
+  relocate(ID, .before = Individual) %>% 
+  as.data.frame()
+
+# Create RInSp object
+rinsp_geno_RRA = import.RInSp(geno_RRA, row.names = 1, data.type = "integer", info.cols = 2)
+
+# WIC/TNW
+WT_geno_RRA = WTdMC(rinsp_geno_RRA, replicates=999, print.ris=TRUE, pop.diet = "average")
+WT_geno_RRA$WonT #0.475
+WT_geno_RRA$p.value
+
+# Proportional similarity index (PSi)
+PSi_geno_RRA = PSicalc(rinsp_geno_RRA, pop.diet = "average", exclude = FALSE, replicates=999, precision = 1e-9)
+PSi_geno_RRA$IS #0.49
+
+
+temp %>% filter(Family.Group != "Transient") %>% 
+  filter(Family.Group != "GGP - West") %>% 
+ggplot(aes(x=reorder(Family.Group, `PSi_geno_RRA$PSi`), y=`PSi_geno_RRA$PSi`))+geom_boxplot()
+```
+
+Estimates for WIC/TNW and PSi are very similar, at ~0.5. 
+
+# Individual data
+
+Subsample 8 scats per individual. Do this 1,000 times and calculate an average specialization index with confidence interval
+
+```{r}
+# Create subsampled dataset with 8 scats per individual and raw sequence reads
+ind_samples <- inner_join(metadata, sp.RRA, by = "SampleID") %>% 
+  filter(Category == "SFCoy") %>% 
+  group_by(Individual) %>%  
+  mutate(count = n(), .after="Individual") %>% 
+  filter(count >=8) %>%
+  select(-c(count)) %>% 
+  group_by(Individual) %>% 
+  summarize(across(where(is.numeric) & !any_of("ID"), ~ round(mean(.) * 1000)))  %>% 
+  mutate(ID = seq(1,nrow(.))) %>% 
+  relocate(ID, .before=Individual)
+  
+sampled_data_inds <- ind_samples %>% # sample 8 scats per individual
+    group_by(Individual) %>%
+    sample_n(size = 8, replace = FALSE) %>%
+    ungroup()
+
+#create RInSp object
+rinsp_inds_RRA = import.RInSp(ind_samples, row.names = 1, data.type = "integer", info.cols = c(2))
+
+# Calculate the proportional similarity index (PSi)
+PSi_inds_RRA = PSicalc(rinsp_inds_RRA, pop.diet = "average", exclude = FALSE, replicates=999, precision = 1e-9)
+PSi_inds_RRA$IS # 0.653
+```
+
+
+# Territory-level differences?
+
+Consider the level of specialization within each territory. Are territories that are more urbanized more specialized?
+
+
+```{r}
+# Define a function to process each territory
+process_territory <- function(territory_name) {
+  # Filter, group, summarize, and format data
+  geno_data <- inner_join(metadata, sp.RRA, by = "SampleID") %>%
+    filter(Category == "SFCoy", Territory == territory_name) %>%
+    group_by(Individual) %>%
+    summarize(across(where(is.numeric), ~ round(mean(.) * 1000))) %>%
+    mutate(ID = seq(1, nrow(.))) %>%
+    relocate(ID, .before = Individual) %>%
+    as.data.frame()
+  
+  # Create RInSp object
+  rinsp_obj <- import.RInSp(geno_data, row.names = 1, data.type = "integer", info.cols = 2)
+  
+  # Calculate WIC/TNW index
+  WT_result <- WTdMC(rinsp_obj, replicates = 999, print.ris = TRUE, pop.diet = "average")
+  
+  # Return results for WonT and p-value
+  list(Territory = territory_name, WonT = WT_result$WonT, p_value = WT_result$p.value)
+}
+
+# Get unique territory names
+unique_territories <- unique(metadata$Territory)
+
+# Apply the function to each territory and store results
+results <- map(unique_territories, process_territory)
+
+# Convert list of results to a data frame for easy viewing
+results_df <- bind_rows(results) %>% 
+  filter(Territory != "Stern Grove", Territory != "Sunset Res") %>% 
+  left_join(covs, by="Territory") %>% 
+  left_join(diet_terr, by="Territory")
+
+# View the results
+arrange(results_df, WonT)
+
+covs <- read.csv("Regression-Analyses/Territory_All_Covariates.csv")
+func.RRA <- read.csv("Filtering-and-QC/func.RRA.clean.csv") %>% select(-c(X))
+diet_terr <- left_join(func.RRA, metadata, by="SampleID") %>% 
+  group_by(Territory) %>% 
+  summarize(Anthropogenic=mean(Anthropogenic),
+            Small.Mammal=mean(Small.Mammal),
+            Medium.Mammal=mean(Medium.Mammal))
+
+results_df %>% 
+  ggplot(aes(x=Small.Mammal, y=WonT))+
+  geom_point()+
+  geom_smooth(method="lm")+
+  geom_text(label=results_df$Territory)+
+  theme_classic()+
+  ylab("WIC/TNW")+xlab("Average RRA Small Mammals")
+
+results_df %>% 
+  ggplot(aes(x=Anthropogenic, y=WonT))+
+  geom_point()+
+  geom_smooth(method="lm")+
+  geom_text(label=results_df$Territory)+
+  theme_classic()+
+  ylab("WIC/TNW")+xlab("Average RRA Human Food")
+
+results_df %>% 
+  ggplot(aes(x=ISA, y=WonT))+
+  geom_point()+
+  geom_smooth(method="lm")+
+  geom_text(label=results_df$Territory)+
+  theme_classic()+
+  ylab("WIC/TNW")+xlab("Impervious Surface Area")
+
+mod1 <- lm(WonT~ISA, data=results_df)
+summary(mod1)
+plot(mod1)
+
+mod2 <- lm(WonT~Anthropogenic, data=results_df)
+summary(mod2)
+plot(mod2)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+

@@ -144,6 +144,44 @@ norm_batch1 <-t(apply(rm.rare_batch1[,2:ncol(rm.rare_batch1)], 1, function(x) x/
 norm_batch2 <-t(apply(rm.rare_batch2[,2:ncol(rm.rare_batch2)], 1, function(x) x/sum(x)))
 ```
 
+# Create data frames with filtered read counts for specialization analysis
+
+To create data frames of (filtered) raw read counts, convert proportions back to raw reads except for reads that represent <0.5% of the total and rare and/or small-bodied prey that is present in low proportions.
+
+```{r}
+# Define function to remove diet items representing <0.5% of reads within a scat
+convert.to.raw <- function(proportion, total) {
+  return(proportion * total)
+}
+
+# Extract total read columns
+totals_batch1 <- rm_low_batch1 %>% select(c(SampleID, Total))
+totals_batch2 <- rm_low_batch2 %>% select(c(SampleID, Total))
+
+
+# Convert proportions back to raw reads
+filtered_rawseqs_batch1 <- left_join(totals_batch1, rm.rare_batch1, by="SampleID") %>% 
+  mutate(across(where(is.numeric) & !any_of("Total"), ~ convert.to.raw(., Total))) %>% 
+  select(-c(Total))
+
+filtered_rawseqs_batch2 <- left_join(totals_batch2, rm.rare_batch2, by="SampleID") %>% 
+  mutate(across(where(is.numeric) & !any_of("Total"), ~ convert.to.raw(., Total))) %>% 
+  select(-c(Total))
+
+# Combine data frames
+filtered_rawseqs_combined <- plyr::rbind.fill(filtered_rawseqs_batch1, filtered_rawseqs_batch2) %>% replace(is.na(.), 0) # replace NAs with zeros
+  
+# Identify columns where all values are zeros
+zero_columns_rawseqs <- sapply(filtered_rawseqs_combined[, -1], function(col) all(col == 0))
+
+# Remove columns where all values are zeros
+filtered_rawseqs <- filtered_rawseqs_combined[, c(TRUE, !zero_columns_rawseqs)]
+
+# Reorder alphabetically
+new.order.rawseqs <- sort(colnames(filtered_rawseqs[,2:ncol(filtered_rawseqs)])) # generate alphabetical list of diet items
+filtered_rawseqs <- filtered_rawseqs[,c("SampleID", new.order.rawseqs)] #reorder species columns to be alphabetical
+```
+
 # Create species-level RRA and FOO data sets for each batch
 
 To convert from RRA to FOO, use the function defined below, which codes any amount of reads >0 as "1".
@@ -251,7 +289,7 @@ dups.to.remove <- c("S20_3767","S20_3824","S20_3825","S20_3835","S20_3838","S21_
 Clean diet data:
 ```{r}
 # Define input data frames
-input <- list(func.RRA, func.FOO, sp.RRA, sp.FOO)
+input <- list(func.RRA, func.FOO, sp.RRA, sp.FOO, filtered_rawseqs)
 
 # Define function to clean data
 clean.data <- function(x) {left_join(x, metadata, by = "SampleID") %>%
@@ -268,12 +306,14 @@ func.RRA.clean <- results[[1]]
 func.FOO.clean <- results[[2]]
 sp.RRA.output <- results[[3]]
 sp.FOO.output <- results[[4]]
+filtered_rawseqs.output <- results[[5]]
 
 # Retain samples only
 func.RRA.clean <- func.RRA.clean %>% select(-c("Replicate":"Cytb_Sp"))
 func.FOO.clean <- func.FOO.clean %>% select(-c("Replicate":"Cytb_Sp"))
 sp.RRA.output <- sp.RRA.output %>% select(-c("Replicate":"Cytb_Sp"))
 sp.FOO.output <- sp.FOO.output %>% select(-c("Replicate":"Cytb_Sp"))
+filtered_rawseqs.output <- filtered_rawseqs.output %>% select(-c("Replicate":"Cytb_Sp"))
 
 # Identify columns from species data frame where all values are zeros
 zero_columns <- sapply(sp.RRA.output[, -1], function(col) all(col == 0))
@@ -281,6 +321,7 @@ zero_columns <- sapply(sp.RRA.output[, -1], function(col) all(col == 0))
 # Remove columns where all values are zeros
 sp.RRA.clean <- sp.RRA.output[, c(TRUE, !zero_columns)]
 sp.FOO.clean <- sp.FOO.output[, c(TRUE, !zero_columns)]
+rawseqs.clean <- filtered_rawseqs.output[, c(TRUE, !zero_columns)]
 ```
 
 # Save filtered and cleaned diet data for subsequent analyses
@@ -290,6 +331,7 @@ write.csv(func.RRA.clean, "Filtering-and-QC/func.RRA.clean.csv")
 write.csv(func.FOO.clean, "Filtering-and-QC/func.FOO.clean.csv")
 write.csv(sp.RRA.clean, "Filtering-and-QC/sp.RRA.clean.csv")
 write.csv(sp.FOO.clean, "Filtering-and-QC/sp.FOO.clean.csv")
+write.csv(rawseqs.clean, "Filtering-and-QC/raw.seqs.clean.csv")
 ```
 
 # Generate filtered dataset for replication analyses
