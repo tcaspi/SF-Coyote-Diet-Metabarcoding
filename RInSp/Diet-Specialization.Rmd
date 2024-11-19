@@ -9,18 +9,19 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(RInSp)
-library(bayestestR)
+library(mgcv)
+library(ggrepel)
 
-# Define custom theme for plotting
+# Set custom plot theme
 theme_custom <- function() {
-  theme_minimal() +
+  theme_classic() +
   theme(panel.grid.minor = element_blank(),
         plot.background = element_rect(fill = "white", color = NA),
         strip.background = element_rect(fill = "grey80", color = NA),
-        axis.text.y = element_text(size=15),
-        axis.text.x = element_text(size=15),
-        axis.title.y = element_text(size=15),
-        axis.title.x = element_text(size=15))}
+        axis.text.y = element_text(size=10),
+        axis.text.x = element_text(size=10),
+        axis.title.y = element_text(size=12),
+        axis.title.x = element_text(size=12))}
 ```
 
 # Prepare data
@@ -28,9 +29,7 @@ theme_custom <- function() {
 ```{r}
 # Load diet data
 sp.RRA <- read.csv("Filtering-and-QC/sp.RRA.clean.csv") %>% select(-c(X))
-sp.FOO <- read.csv("Filtering-and-QC/sp.FOO.clean.csv") %>% select(-c(X))
 func.RRA <- read.csv("Filtering-and-QC/func.RRA.clean.csv") %>% select(-c(X))
-rawseqs.clean <- read.csv("Filtering-and-QC/raw.seqs.clean.csv") %>% select(-c(X))
 
 # Load covariate data
 covs <- read.csv("Regression-Analyses/Territory_All_Covariates.csv")
@@ -79,146 +78,50 @@ metadata <- read.csv("Filtering-and-QC/All_Metadata.csv") %>%
          Individual = as.factor(Individual))
 ```
 
-# All scats with genotypes (n=525)
+# Population BIC/TNW
 
-## Subsampling approach using sequence reads and proportions
-
-Using a data frame containing sequence reads per diet item (integer data), randomly subsample the dataset so that there is a single scat per individual. Then, calculate WIC/TNW and PSi values and associate p-values. Iterate this process 1,000 times and calculate an means specialization indices with associated confidence intervals as well as the proportion of p-values that are significant. Use pop.diet = "average" to ensure that individual diets are first converted into proportions, and only then are these proportions averaged for each resource.
-
-```{r}
-# Prepare sequence read data set 
-geno_samples <- inner_join(metadata, rawseqs.clean, by="SampleID") %>% 
-  filter(Category == "SFCoy")
-
-# Randomly sample one scat per individual
-sampled_data <- geno_samples %>% 
-    group_by(Individual) %>%
-    sample_n(size = 1, replace = TRUE) %>%
-    ungroup() %>% 
-   mutate(ID = seq(1,nrow(.))) %>% 
-    relocate(ID, .before=SampleID) %>% 
-    as.data.frame()
-
-# Create RInSp object
-rinsp_geno_subsamples = import.RInSp(sampled_data, row.names = 1, data.type = "integer", info.cols = c(2:5))
-
-# Calculate WIC/TNW
-WT_geno_subsamples = WTdMC(rinsp_geno_subsamples, replicates = 999, pop.diet = "average")
-WT_geno_subsamples$WonT 
-WT_geno_subsamples$p.value
-
-# Calculate the proportional similarity index (PSi)
-PSi_geno_subsamples = PSicalc(rinsp_geno_subsamples, pop.diet = "average", exclude = FALSE, replicates=999, precision = 1e-9)
-PSi_geno_subsamples$IS
-PSi_geno_subsamples$IS.pvalue
-```
-
-
-Conduct 1,000 iterations. This process takes a long time to run, so results are saved and stored under the file name: ______.
-
-```{r}
-# Set up vectors to store results
-wonT_values <- numeric(100)
-wonT_pvalues <- numeric(100)
-IS_values <- numeric(100)
-IS_pvalues <- numeric(100)
-
-# Run the sampling and calculation 100 times
-for (i in 1:100) {
-  # Sample one scat per individual
-  sampled_data <- geno_samples %>% 
-    group_by(Individual) %>%
-    sample_n(size = 1, replace = TRUE) %>%
-    ungroup() %>% 
-    mutate(ID = seq(1, nrow(.))) %>% 
-    relocate(ID, .before = SampleID) %>% 
-    as.data.frame()
-  
-  # Create RInSp object
-  rinsp_geno_subsamples <- import.RInSp(sampled_data, row.names = 1, data.type = "integer",
-                                        info.cols = c(2:5))
-  
-  # Calculate WIC/TNW
-  WT_geno_subsamples <- WTdMC(rinsp_geno_subsamples, replicates = 999, pop.diet = "average",
-                              print.ris = FALSE)
-  wonT_values[i] <- WT_geno_subsamples$WonT
-  wonT_pvalues[i] <- WT_geno_subsamples$p.value
-  
-  # Calculate the Proportional Similarity index (PSi)
-  PSi_geno_subsamples <- PSicalc(rinsp_geno_subsamples, pop.diet = "average", 
-                                 exclude = TRUE, replicates = 999, precision = 1e-9)
-  IS_values[i] <- PSi_geno_subsamples$IS
-  IS_pvalues[i] <- PSi_geno_subsamples$IS.pvalue
-}
-
-# Save model output
-# saveRDS()
-
-# Calculate mean and 95% credible intervals for WonT and IS
-mean_wonT <- mean(wonT_values)
-mean_IS <- mean(IS_values)
-ci_wonT <- ci(wonT_values, ci = 0.95)
-ci_IS <- ci(IS_values, ci = 0.95)
-
-# Calculate the proportion of p-values < 0.05 for WonT and IS
-prop_wonT_pval <- mean(wonT_pvalues < 0.05) ## IS THIS CORRECT?
-prop_IS_pval <- mean(IS_pvalues < 0.05)
-
-# Summary of results
-summary_results <- data.frame(
-  Metric = c("WonT", "IS"),
-  Mean = c(mean_wonT, mean_IS),
-  CI_lower = c(ci_wonT$CI_low, ci_IS$CI_low),
-  CI_upper = c(ci_wonT$CI_high, ci_IS$CI_high),
-  Pval_below_0.05 = c(prop_wonT_pval, prop_IS_pval))
-```
-
-## Integrative approach averaging across all samples per individual
-
-To avoid throwing away data, an alternative approach involves utilizing all scats collected per individual. However, RInSp requires that each row represent an individual, not a sample. Accordingly, the code below calculates the average relative read abundance per species per individual. To transform these means into integers, the means are then multiplied by 1,000 and rounded to the nearest whole number. This ensures that integer data created reflect the RRA proportions ascribed to each individual. Once again, pop.diet = "average" is used to ensure that individual diets are first converted into proportions and only then are those proportions averaged for each resource to calculate the population-level diet.
+The code below calculates the average relative read abundance per diet item per individual and transforms these proportions to integers by multiplying by 1,000 and rounding to the nearest whole number. Accordingly, these integer data reflect the relative read abundances ascribed to each individual. Then, BIC/TNW is calculated for the population.
 
 ```{R}
 # Create data frame of averaged RRA values per individual and convert to integers
 geno_RRA <- inner_join(metadata, sp.RRA, by = "SampleID") %>% 
-  filter(Category == "SFCoy") %>% 
+  filter(Category == "SFCoy") %>% # only include scats with individual IDs 
   group_by(Individual) %>% 
-  summarize(across(where(is.numeric), ~ round(mean(.) * 1000)))  %>% # multiple by 1000 & round
+  summarize(across(where(is.numeric), ~ round(mean(.) * 1000)))  %>% # multiply by 1000 & round to nearest whole number
   mutate(ID = seq(1, nrow(.))) %>% 
   relocate(ID, .before = Individual) %>% 
+  left_join(fams, by="Individual") %>% # add individual family group assignments
+  relocate(Family.Group, .after=ID) %>% 
+  relocate(Sex, .after = Family.Group) %>% 
+  mutate(FamID = as.factor(Family.Group), .before=Family.Group) %>% 
   as.data.frame()
 
 # Create RInSp object
-rinsp_geno_RRA = import.RInSp(geno_RRA, row.names = 1, data.type = "integer", info.cols = 2)
+rinsp_geno_RRA = import.RInSp(geno_RRA, row.names = 1, data.type = "integer", info.cols = c(2:5))
 
 # WIC/TNW
 WT_geno_RRA = WTdMC(rinsp_geno_RRA, replicates=999, print.ris=TRUE, pop.diet = "average")
-WT_geno_RRA$WonT #0.475
-WT_geno_RRA$p.value #0.001
 
-# Proportional similarity index (PSi)
-PSi_geno_RRA = PSicalc(rinsp_geno_RRA, pop.diet = "average", exclude = FALSE, replicates=999, precision = 1e-9)
-PSi_geno_RRA$IS #0.49
-PSi_geno_RRA$IS.pvalue #0.001
+# BIC/TNW
+pop_BIC.TNW <- 1-WT_geno_RRA$WonT
 ```
 
-Estimates for WIC/TNW and PSi are very similar, at ~0.5. The problem with this approach is that many indidivduals only have a single sample, but other individuals have several samples. The more samples per individual, the more opportunities they have to get a more representative diet, making them look like generalists, so this approach is problematic. It is best to have equal(ish) representation among individuals, which in this case, is a single scat.
+# Territory-level BIC/TNW
 
-# Territory-level differences
-
-Measure the extent of individual specialization within each territory.
+The code below calculates BIC/TNW for each family group of coyotes. Given that diets are relatively consistent within territories, we expect to find that between-individual differences explain less of the dietary variation within family groups relative to the entire population.
 
 ```{r}
-# Define sites to drop
+# Define sites to drop (not permanent territories)
 sites.to.drop <- c("Stern Grove", "Sunset Res")
 
 # Define a function to process each territory
-process_territory <- function(territory_name) {
+process_familygroup <- function(family_name) {
   # Filter, group, summarize, and format data
   geno_data <- inner_join(metadata, sp.RRA, by = "SampleID") %>%
     left_join(fams, by="Individual") %>% 
-    filter(Category == "SFCoy", Family.Group == territory_name) %>%
+    filter(Category == "SFCoy", Family.Group == family_name) %>%
     group_by(Individual) %>%
-    summarize(across(where(is.numeric), ~ round(mean(.) * 1000))) %>%
+    summarize(across(where(is.numeric), ~ round(mean(.) * 10000))) %>%
     mutate(ID = seq(1, nrow(.))) %>%
     relocate(ID, .before = Individual) %>%
     as.data.frame()
@@ -233,237 +136,92 @@ process_territory <- function(territory_name) {
   WT_result <- WTdMC(rinsp_obj, replicates = 999, print.ris = TRUE, pop.diet = "average")
   
   # Return results for WonT and p-value
-  list(Family.Group = territory_name, WonT = WT_result$WonT, p_value = WT_result$p.value,
+  list(Family.Group = family_name, WIC.TNW = WT_result$WonT, p_value = WT_result$p.value,
        Num.Ind = row_count)
 }
 
-# Get unique territory names
+# Get unique family group names
 unique_fams <- unique(fams$Family.Group)
 
-# Apply the function to each territory and store results
-results <- map(unique_fams, process_territory)
+# Apply the function to each family group and store results
+results <- map(unique_fams, process_familygroup)
 
-# Create data frame of averages for diet functional groups for each territory
-diet_terr <- left_join(func.RRA, metadata, by="SampleID") %>% 
-  group_by(Territory) %>% 
-  summarize(Anthropogenic=mean(Anthropogenic),
-            Small.Mammal=mean(Small.Mammal),
-            Medium.Mammal=mean(Medium.Mammal),
-            Birds = mean(Bird)) %>% 
-  filter(!Territory %in% sites.to.drop)
+# Calculate the number of scats used in each family group
+territory_counts <- inner_join(metadata, sp.RRA, by = "SampleID") %>%
+    left_join(fams, by="Individual") %>% 
+    filter(Category == "SFCoy") %>% 
+    filter(Family.Group != "Transient") %>% 
+    group_by(Family.Group) %>% 
+    mutate(Num.Scats = n()) %>% 
+    relocate(Family.Group, .after = SampleID) %>% 
+    relocate(Num.Scats, .after = Family.Group) %>% 
+    distinct(Family.Group, Num.Scats)
 
 # Convert list of results to a data frame and add covariate data
 results_df <- bind_rows(results) %>% 
-  mutate(BIC = 1-WonT, .after=WonT) %>% 
+  mutate(BIC.TNW = 1-WIC.TNW, .after=WIC.TNW) %>% 
   filter(Family.Group != "Transient") %>% # drop transient individual
   left_join(covs, by = c("Family.Group" = "Territory")) %>%  # join environmental covariates
-  left_join(diet_terr, by = c("Family.Group" = "Territory")) # join territory-level functional group diet data
+  left_join(territory_counts, by="Family.Group") %>% 
+  mutate(Fam.Names = case_when( # add custom family group names for plotting
+    Family.Group == "Bernal" ~ "Bernal Hill",
+    Family.Group == "Coit" ~ "Coit Tower",
+    Family.Group == "Glen" ~ "Glen Canyon",
+    Family.Group == "Corona" ~ "Corona Heights Park",
+    Family.Group == "GGP - East" ~ "Golden Gate Park - East",
+    Family.Group == "St. Francis" ~ "St. Francis Wood",
+    Family.Group == "GGP - West" ~ "Golden Gate Park - West",
+    Family.Group == "McLaren" ~ "McLaren Park",
+    TRUE ~ Family.Group))
 
 # View the results
-arrange(results_df, WonT)
-
-# Make plots
-results_df %>% 
-  ggplot(aes(x=Small.Mammal*100, y=WonT))+
-  geom_point()+
-  geom_smooth(method="lm")+
-  geom_hline(yintercept=0.475, linetype = "dashed")+
-  geom_text(label=results_df$Family.Group)+
-  theme_custom()+
-  ylab("WIC/TNW")+xlab("Average RRA Small Mammals")
-
-results_df %>% 
-  ggplot(aes(x=Anthropogenic*100, y=WonT))+
-  geom_point()+
-  geom_smooth(method="lm")+
-  geom_hline(yintercept=0.475, linetype = "dashed")+
-  geom_text(label=results_df$Family.Group)+
-  theme_custom()+
-  ylab("WIC/TNW")+xlab("Average RRA Human Food")
-
-results_df %>% 
-  ggplot(aes(x=ISA, y=WonT))+
-  geom_point()+
-  geom_smooth(method="lm")+
-  geom_hline(yintercept=0.475, linetype = "dashed")+
-  geom_text(label=results_df$Family.Group)+
-  theme_custom()+
-  ylab("WIC/TNW")+xlab("Impervious Surface Area")
-
-# Model
-mod.WonT.ISA <- lm(WonT~ISA, data=results_df)
-summary(mod.WonT.ISA)
-
-mod.WonT.Anthro <- lm(WonT~Anthropogenic, data=results_df)
-summary(mod.WonT.Anthro)
-
-mod.WonT.SmallMam <- lm(WonT~Small.Mammal, data=results_df)
-summary(mod.WonT.SmallMam)
+arrange(results_df, BIC.TNW)
 ```
 
-# Individual data
-
-Subsample 8 scats per individual. Do this 1,000 times and calculate an average specialization index with confidence interval
-
+Model and plot results:
 ```{r}
-# Create subsampled dataset with 8 scats per individual and raw sequence reads
-ind_samples <- inner_join(metadata, sp.RRA, by = "SampleID") %>% 
-  filter(Category == "SFCoy") %>% 
-  group_by(Individual) %>%  
-  mutate(count = n(), .after="Individual") %>% 
-  filter(count >=8) %>%
-  select(-c(count)) %>% 
-  group_by(Individual) %>% 
-  summarize(across(where(is.numeric) & !any_of("ID"), ~ round(mean(.) * 100000)))  %>% 
-  mutate(ID = seq(1,nrow(.))) %>% 
-  relocate(ID, .before=Individual) %>% 
-  left_join(fams, by="Individual") %>% 
-  relocate("Sex", .after="Individual") %>% 
-  relocate("Family.Group", .after="Sex")
+# Model BIC/TNW as a function of ISA and number of scats
+mod.BIC.ISA.beta.gam <- gam(BIC.TNW ~ ISA + Num.Scats, family=betar(link="logit"), data = results_df)
+summary(mod.BIC.ISA.beta.gam)
 
-# Create RInSp object
-rinsp_ind_RRA = import.RInSp(ind_samples, row.names = 1, data.type = "integer", info.cols = c(2:4))
+# Generate new ISA and Num.Scats data for making predictions
+new_data <- data.frame(ISA = seq(0, 100, by=0.1),
+                       Num.Scats = round(mean(results_df$Num.Scats)))
 
-# WIC/TNW relative to the whole population diet
-WT_ind_RRA = WTdMC(rinsp_ind_RRA, replicates=999, print.ris=TRUE, pop.diet = "average")
-WT_ind_RRA$WonT #0.727
-WT_ind_RRA$p.value #0.001
+# Make predictions on the link scale, calculate confidence interval boundaries on the link scale, then back transform using the inverse link to get boundaries on the response scale
+gam_preds <- as.data.frame(mgcv::predict.gam(mod.BIC.ISA.beta.gam, newdata = new_data, se.fit = TRUE, type="link")) %>% 
+  mutate(ISA = new_data$ISA, .before="fit") %>% 
+  mutate(upr = fit + (1.96 * se.fit),
+         lwr = fit - (1.96 * se.fit),
+         BIC.TNW = mod.BIC.ISA.beta.gam$family$linkinv(fit),
+         upr_adj = mod.BIC.ISA.beta.gam$family$linkinv(upr),
+         lwr_adj = mod.BIC.ISA.beta.gam$family$linkinv(lwr))
 
-# Proportional similarity index (PSi) relative to the whole population diet
-PSi_ind_RRA = PSicalc(rinsp_ind_RRA, pop.diet = "average", exclude = FALSE, replicates=999, precision = 1e-9)
-PSi_ind_RRA$IS #0.653
-PSi_ind_RRA$IS.pvalue #0.001
+# Plot BIC/TNW as a function of ISA
+ggplot() +
+  
+  # Add regression line for predictions of BIC/TNW for each ISA value
+  geom_smooth(data = gam_preds, aes(x = ISA, y = BIC.TNW,
+                                   ymin = lwr_adj, ymax = upr_adj), stat = 'identity',
+            color="#696464", fill="darkgrey", alpha=0.5, linewidth=0.5)+
+  
+  # Add population-level BIC/TNW
+   geom_hline(yintercept=(geno_RRA_BIC/geno_RRA_TNW), linetype = "dashed")+
+  
+  # Add BIC/TNW values for each family group
+  geom_point(data = results_df, aes(x = ISA, y = BIC.TNW), size=0.5)+
+  
+  # Add family group labels
+  geom_text_repel(data = results_df, aes(x = ISA, y = BIC.TNW, label = Fam.Names),
+                  size = 2,    # Smaller label size
+                  segment.color = "grey50", segment.size = 0.3,
+                  direction="both") +
+  
+  # Set graphics
+  theme_custom()+
+  ylab("BIC/TNW")+xlab("Impervious Surface Cover")+
+  scale_x_continuous(limits=c(0,101), expand=c(0, 0))+
+  scale_y_continuous(limits=c(0,1))
 
-PSi_inds_df <- data.frame(PSi = PSi_ind_RRA$PSi) %>% 
-  mutate(ID = seq(1,nrow(.))) %>% 
-  left_join(ind_samples %>% select(ID, Individual), by = "ID") %>% 
-  left_join(fams, by="Individual") %>% 
-  left_join(covs, by = c("Family.Group" = "Territory"))
-
-# Calculating IS within each family group using the high-quality data
-table(ind_samples$Family.Group)
-
-# Subset dfs for each family group
-inds_Bernal <- ind_samples %>% filter(Family.Group=="Bernal")
-inds_Coit <- ind_samples %>% filter(Family.Group=="Coit")
-inds_Corona <- ind_samples %>% filter(Family.Group=="Corona")
-inds_Glen <- ind_samples %>% filter(Family.Group=="Glen")
-inds_Merced <- ind_samples %>% filter(Family.Group=="Merced")
-inds_Presidio <- ind_samples %>% filter(Family.Group=="Presidio")
-
-# Create RInSp objects
-rinsp_inds_Bernal = import.RInSp(inds_Bernal, row.names = 1, data.type = "integer", info.cols = c(2:4))
-rinsp_inds_Coit = import.RInSp(inds_Coit, row.names = 1, data.type = "integer", info.cols = c(2:4))
-rinsp_inds_Corona = import.RInSp(inds_Corona, row.names = 1, data.type = "integer", info.cols = c(2:4))
-rinsp_inds_Glen = import.RInSp(inds_Glen, row.names = 1, data.type = "integer", info.cols = c(2:4))
-rinsp_inds_Merced = import.RInSp(inds_Merced, row.names = 1, data.type = "integer", info.cols = c(2:4))
-rinsp_inds_Presidio = import.RInSp(inds_Presidio, row.names = 1, data.type = "integer", info.cols = c(2:4))
-
-# Calculate WIC/TNW index
-WT_inds_Bernal <- WTdMC(rinsp_inds_Bernal, replicates = 999, print.ris = TRUE, pop.diet = "average")
-WT_inds_Coit <- WTdMC(rinsp_inds_Coit, replicates = 999, print.ris = TRUE, pop.diet = "average")
-WT_inds_Corona <- WTdMC(rinsp_inds_Corona, replicates = 999, print.ris = TRUE, pop.diet = "average")
-WT_inds_Glen <- WTdMC(rinsp_inds_Glen, replicates = 999, print.ris = TRUE, pop.diet = "average")
-WT_inds_Merced <- WTdMC(rinsp_inds_Merced, replicates = 999, print.ris = TRUE, pop.diet = "average")
-WT_inds_Presidio <- WTdMC(rinsp_inds_Presidio, replicates = 999, print.ris = TRUE, pop.diet = "average")
-
-# Combine the WonT values into a data frame
-results_inds_df <- tibble(
-  Territory = c("Bernal", "Coit", "Corona", "Glen", "Merced", "Presidio"),
-  WonT = c(
-    WT_inds_Bernal$WonT,
-    WT_inds_Coit$WonT,
-    WT_inds_Corona$WonT,
-    WT_inds_Glen$WonT,
-    WT_inds_Merced$WonT,
-    WT_inds_Presidio$WonT)) %>% 
-  left_join(covs, by="Territory")
-
-ggplot(results_inds_df, aes(x=ISA, y=WonT))+
-  geom_point()+
-  geom_smooth(method="lm")+
-  geom_text(label=results_inds_df$Territory)+
-  geom_hline(yintercept=0.727, linetype="dashed")+
-  ylim(.4,1.)+
-  theme_custom()
-
-# Calculate PSi's within each family group for each individual
-PSi_inds_Bernal = PSicalc(rinsp_inds_Bernal, pop.diet = "average", exclude = FALSE, replicates=999, precision = 1e-9)
-PSi_inds_Coit = PSicalc(rinsp_inds_Coit, pop.diet = "average", exclude = FALSE, replicates=999, precision = 1e-9)
-PSi_inds_Corona = PSicalc(rinsp_inds_Corona, pop.diet = "average", exclude = FALSE, replicates=999, precision = 1e-9)
-PSi_inds_Glen = PSicalc(rinsp_inds_Glen, pop.diet = "average", exclude = FALSE, replicates=999, precision = 1e-9)
-PSi_inds_Merced = PSicalc(rinsp_inds_Merced, pop.diet = "average", exclude = FALSE, replicates=999, precision = 1e-9)
-PSi_inds_Presidio = PSicalc(rinsp_inds_Presidio, pop.diet = "average", exclude = FALSE, replicates=999, precision = 1e-9)
+#ggsave("RInSp/BIC.TNW.plot.png", dpi=600, height=3, width=4)
 ```
-
-
-
-
-1) Calculate specialization for the whole population - across the SF coyote population how much diet variation is attributed to among vs. within individual differences? (subsampling and integrative approaches
-
-    * subsampling approach TBD but probably LOW
-    * integrative approach = 0.475 (47.5% of variation attribute to WITHIN INDIVIDUAL VAR) ->         meaning that MORE of the variation is attributed to BETWEEN INDIVIDUAL VAR
-
-2) Now we can zoom into our family groups: do some have more vs. less IS? YES - seems like anthro-eating groups have less evidence of IS then natural-eating groups (integrative approach; fine bc all groups biased similarly). Can I use these territory-level WIC/TNW values to show the IS is lower (more var explained by within-ind diffs) within family groups than across the pop?
-  
-    * Yes so most of the family groups have WIC/TNW values that are GREATER than the population     estimate of IS. This indicates to us that WITHIN FAMILIES there is not strong evidence of IS     but  
-
-Now the question is whether or not these results are repeatable when we use the individual for which we have strong longitudinal sampling (multiple scats, 8 or more). When using this population of individuals, we find CONSIDERABLY less evidence for IS in this subset of individuals (0.73) BUT when we look at the family groups we have (which is only 6 with more than one individual) we see a similar pattern where the estimated amount of within-group IS is even less (WIC/TNW of 0.77-0.94).
-
-What all if this points to is pretty moderate IS (esp. for a species like a coyote) across the population, but considerably less strong IS within family groups, with the least strong IS in the groups that have the least access to natural prey.
-
-# Taking random subsamples and seeing what the WIC/TNW values are to see if my estimates are strongly different from random
-
-```{r}
-# let's take a totally random subsample of 100 scats
-all_data <- inner_join(metadata, sp.RRA, by = "SampleID") %>% 
-  filter(Category == "SFCoy") %>% 
-  mutate(rand.ID = sample(1:111, size = n(), replace = TRUE), .after=Individual) %>% 
-  group_by(rand.ID) %>%
-  summarize(across(where(is.numeric), ~ round(mean(.) * 10000))) %>%
-  mutate(ID = seq(1, nrow(.))) %>%
-  relocate(ID, .before = rand.ID) %>%
-  as.data.frame()
-
-
-genotype_data <- inner_join(metadata, sp.RRA, by = "SampleID") %>% 
-  filter(Category == "SFCoy") %>% 
-  sample_n(size = 100, replace = FALSE) %>% 
-  mutate(rand.ID = sample(1:15, size = n(), replace = TRUE), .after=Individual) %>% 
-  group_by(rand.ID) %>%
-  summarize(across(where(is.numeric), ~ round(mean(.) * 10000))) %>%
-  mutate(ID = seq(1, nrow(.))) %>%
-  relocate(ID, .before = rand.ID) %>%
-  as.data.frame()
-  
-  
-  # Create RInSp object
-all_rand <- import.RInSp(all_data, row.names = 1, data.type = "integer", info.cols = 2)
-rinsp_obj_temp <- import.RInSp(genotype_data, row.names = 1, data.type = "integer", info.cols = 2)
-  
-  # Calculate WIC/TNW index
-WT_result_rand <- WTdMC(all_rand, replicates = 999, print.ris = TRUE, pop.diet = "average") # here all the IDs are totally scrambled - let's see if there still evidence of specialization or not; if not, i'll feel good that my estimate of ~0.48 is legit # RESULT: 0.6485188
-WT_result_temp <- WTdMC(rinsp_obj_temp, replicates = 999, print.ris = TRUE, pop.diet = "average") # here all the ID's for a subset of 100 samples (a random Territory) are all scrambled. i'm doing this to see if i still get considerably less variation explained by WIC compared to the scrambled all data; if it's similar to the estimate above then I'll know that the reduced sample size is not what is causing a reduction in variance explained by BIC. RESULT: 0.71; so the diff between my pop random IS and my territory random IS is negligible. But in my actual data i see strong diffs between Bernal (>0.653) Coit (0.747) and the population IS which is 0.48
-
-```
-
-
-
-OKAY SO TALKED WITH BEN:
--only the subsampling approach really makes sense because otherwise im inflating the diversity for the freq sampled coyotes and that messes with IS estimates
--so sticking with the subsampling approach i will iterate 1000 times to estimate a pop mean and CI
--then i will do the subsampling approach at the TERRITORY level and calculate a mean WoT value for each territory (and CI??)
--then i will plot the MEANS for each territory as a function of ISA to hopefully show that: where coys have less access to natural prey, they will all use human food sources, which decreases specialization; but where they have access to natural prey, opportunities allow indiviudals to specialize and diversity their diets relative to one another; therefore, in a city which has interspersed more natural and less natural areas, we see a lot of indiviudal level variation and specialization as a function of the landscape.
-
--will need to figure out how to run the code for the territory level situations.
-
-
-
-
-
-
-
-
-
-
-
