@@ -11,6 +11,7 @@ library(tidyverse)
 library(RInSp)
 library(mgcv)
 library(ggrepel)
+library(cowplot)
 
 # Set custom plot theme
 theme_custom <- function() {
@@ -225,3 +226,74 @@ ggplot() +
 
 #ggsave("RInSp/BIC.TNW.plot.png", dpi=600, height=3, width=4)
 ```
+
+# Individual data
+
+Calculate Proportional Similarity index value for each coyote with eight or more scats.
+
+```{r}
+# Create subsampled dataset with 8 scats per individual and raw sequence reads
+ind_samples <- inner_join(metadata, sp.RRA, by = "SampleID") %>% 
+  filter(Category == "SFCoy") %>% 
+  select(c(SampleID, Individual)) %>% 
+  group_by(Individual) %>%  
+  mutate(count = n(), .after="Individual") %>% 
+  filter(count >=8) %>% 
+  distinct(Individual, count)
+
+# Calculate PSi values for every coyote in the data set
+PSi_all = PSicalc(rinsp_geno_RRA, pop.diet = "average", exclude = FALSE, replicates=999, precision = 1e-9)
+
+# Range of PSi value in the population
+hist(temp$PSi, xlim = c(0, 1))
+
+# Create list of 22 frequently sampled coyotes with 8 or more scats
+coyote.names <- ind_samples$Individual
+
+# Extract PSi values for 22 coyotes with 8 or more scats
+PSi_all_df <- data.frame(PSi = PSi_all$PSi) %>% 
+  mutate(ID = seq(1,nrow(.))) %>% 
+  left_join(geno_RRA %>% select(c(ID, Individual, Family.Group)), by="ID") %>% 
+  filter(Individual %in% coyote.names)
+```
+
+Overlay PSi values onto stacked bar plot showing diet variation among frequently sample coyotes. NOTE - prior to running this code the stacked bar plot (p.ind_stackedbar) from the Diet-Plots.Rmd file must be generated.
+
+```{r}
+# Plot PSi values faceted by family group
+p.PSi <- PSi_all_df %>%
+  ggplot(aes(x=reorder(Individual, Family.Group), y=PSi)) +
+  geom_point(size=1.5)+
+  scale_y_continuous(expand = c(0,0), limits=c(0,1), position="right")+
+  facet_grid(~Family.Group, scales = "free", space = "free",
+             labeller = labeller(Family.Group = label_wrap_gen(width = 1)))+
+  ylab("PSi") + xlab(NULL)+
+  theme_void() +
+  theme(strip.text.x = element_blank(),
+        axis.title.y = element_text(angle=270, size=10),
+        axis.text.y = element_text(margin = margin(r = 5), size=8, color="#504f4f"),
+        axis.ticks.y = element_line(),
+        axis.ticks.length.y = unit(0.08, "cm"),
+        legend.title=element_blank())
+
+# Move legend out of the way on stacked bar plot
+p.diet <- p.ind_stackedbar +
+  theme(legend.box.spacing = unit(1, "cm"),
+        axis.text.y=element_text(color="#504f4f"),
+        axis.text.x=element_text(color="#504f4f"))
+
+# Align plots
+p.aligned <- align_plots(p.diet, p.PSi, align = c("hv"), axis = 'rlbt')
+
+# Overlay plots
+ggdraw() +
+  draw_plot(p.aligned[[1]], 0, 0, 1, 1) +
+  draw_plot(p.aligned[[2]], 0, 0, 1, 1)
+
+
+ggsave("diet.PSi.png", dpi=600, height=4, width=6.5)
+```
+
+
+
+

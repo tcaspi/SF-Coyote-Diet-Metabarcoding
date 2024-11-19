@@ -360,7 +360,7 @@ Make plot:
 names <- c("Anthropogenic", "Birds", "Herptiles", "Marine Mammals", "Medium-Sized Mammals", "Small Mammals")
 
 # RRA
-func.RRA.ids %>%
+p.ind_stackedbar <- func.RRA.ids %>%
   ggplot(aes(x=reorder(Individual, Family.Group), y=meanRRA, fill=Func.Group)) +
   geom_col()+
   scale_y_continuous(expand = c(0,0))+
@@ -376,5 +376,7 @@ func.RRA.ids %>%
         legend.title=element_blank(),
         legend.text = element_text(size = 8),  # Adjust the size of the legend text
         legend.key.size = unit(0.5, "cm"))
+
+p.ind_stackedbar
 ```
 
