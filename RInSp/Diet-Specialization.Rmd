@@ -1,6 +1,6 @@
 ---
 title: "Diet-Specialization"
-author: "Tali Caspi"
+author: " "
 date: "2024-11-13"
 output: html_document
 ---
@@ -27,10 +27,11 @@ theme_custom <- function() {
 
 # Prepare data
 
+Format data for analyses in RInSp.
+
 ```{r}
 # Load diet data
 sp.RRA <- read.csv("Filtering-and-QC/sp.RRA.clean.csv") %>% select(-c(X))
-func.RRA <- read.csv("Filtering-and-QC/func.RRA.clean.csv") %>% select(-c(X))
 
 # Load covariate data
 covs <- read.csv("Regression-Analyses/Territory_All_Covariates.csv")
@@ -39,7 +40,7 @@ covs <- read.csv("Regression-Analyses/Territory_All_Covariates.csv")
 fams <- read.csv("Diet-Plots/IDs.csv")
 
 # Make sample list
-sample_list <- rawseqs.clean %>% select(SampleID)
+sample_list <- sp.RRA %>% select(SampleID)
 
 # Load metadata, add territories, seasons, and select relevant columns
 metadata <- read.csv("Filtering-and-QC/All_Metadata.csv") %>% 
@@ -81,7 +82,7 @@ metadata <- read.csv("Filtering-and-QC/All_Metadata.csv") %>%
 
 # Population BIC/TNW
 
-The code below calculates the average relative read abundance per diet item per individual and transforms these proportions to integers by multiplying by 1,000 and rounding to the nearest whole number. Accordingly, these integer data reflect the relative read abundances ascribed to each individual. Then, BIC/TNW is calculated for the population.
+Calculates the average relative read abundance per diet item per individual and transform these proportions to integers by multiplying by 1,000 and rounding to the nearest whole number. These integer data reflect the relative read abundances ascribed to each individual. Then, overall BIC/TNW is calculated for the population.
 
 ```{R}
 # Create data frame of averaged RRA values per individual and convert to integers
@@ -103,18 +104,23 @@ rinsp_geno_RRA = import.RInSp(geno_RRA, row.names = 1, data.type = "integer", in
 # WIC/TNW
 WT_geno_RRA = WTdMC(rinsp_geno_RRA, replicates=999, print.ris=TRUE, pop.diet = "average")
 
-# BIC/TNW
+# Extract metrics
+pop_WIC.TNW <- WT_geno_RRA$WonT
 pop_BIC.TNW <- 1-WT_geno_RRA$WonT
 ```
 
+ Using Roughgarden's 1979 equations, based on Shannon-Weaver diversity index: 
+ Within-individual component          =  0.9540732
+ Between-individual component         =  1.053788
+ Total Niche Width for the population =  2.007861
+ The value of WIC/TNW is:  0.4751689
+ The p-value is:  0.001 
+
 # Territory-level BIC/TNW
 
-The code below calculates BIC/TNW for each family group of coyotes. Given that diets are relatively consistent within territories, we expect to find that between-individual differences explain less of the dietary variation within family groups relative to the entire population.
+Calculate BIC/TNW for each family group of coyotes.
 
 ```{r}
-# Define sites to drop (not permanent territories)
-sites.to.drop <- c("Stern Grove", "Sunset Res")
-
 # Define a function to process each territory
 process_familygroup <- function(family_name) {
   # Filter, group, summarize, and format data
@@ -163,7 +169,7 @@ results_df <- bind_rows(results) %>%
   mutate(BIC.TNW = 1-WIC.TNW, .after=WIC.TNW) %>% 
   filter(Family.Group != "Transient") %>% # drop transient individual
   left_join(covs, by = c("Family.Group" = "Territory")) %>%  # join environmental covariates
-  left_join(territory_counts, by="Family.Group") %>% 
+  left_join(territory_counts, by="Family.Group") %>% # join sample counts
   mutate(Fam.Names = case_when( # add custom family group names for plotting
     Family.Group == "Bernal" ~ "Bernal Hill",
     Family.Group == "Coit" ~ "Coit Tower",
@@ -190,7 +196,7 @@ new_data <- data.frame(ISA = seq(0, 100, by=0.1),
                        Num.Scats = round(mean(results_df$Num.Scats)))
 
 # Make predictions on the link scale, calculate confidence interval boundaries on the link scale, then back transform using the inverse link to get boundaries on the response scale
-gam_preds <- as.data.frame(mgcv::predict.gam(mod.BIC.ISA.beta.gam, newdata = new_data, se.fit = TRUE, type="link")) %>% 
+gam_preds_ISA <- as.data.frame(mgcv::predict.gam(mod.BIC.ISA.beta.gam, newdata = new_data, se.fit = TRUE, type="link")) %>% 
   mutate(ISA = new_data$ISA, .before="fit") %>% 
   mutate(upr = fit + (1.96 * se.fit),
          lwr = fit - (1.96 * se.fit),
@@ -202,12 +208,12 @@ gam_preds <- as.data.frame(mgcv::predict.gam(mod.BIC.ISA.beta.gam, newdata = new
 ggplot() +
   
   # Add regression line for predictions of BIC/TNW for each ISA value
-  geom_smooth(data = gam_preds, aes(x = ISA, y = BIC.TNW,
+  geom_smooth(data = gam_preds_ISA, aes(x = ISA, y = BIC.TNW,
                                    ymin = lwr_adj, ymax = upr_adj), stat = 'identity',
             color="#696464", fill="darkgrey", alpha=0.5, linewidth=0.5)+
   
   # Add population-level BIC/TNW
-   geom_hline(yintercept=(geno_RRA_BIC/geno_RRA_TNW), linetype = "dashed")+
+   geom_hline(yintercept=(pop_BIC.TNW), linetype = "dashed")+
   
   # Add BIC/TNW values for each family group
   geom_point(data = results_df, aes(x = ISA, y = BIC.TNW), size=0.5)+
@@ -224,12 +230,13 @@ ggplot() +
   scale_x_continuous(limits=c(0,101), expand=c(0, 0))+
   scale_y_continuous(limits=c(0,1))
 
+# Save plot
 #ggsave("RInSp/BIC.TNW.plot.png", dpi=600, height=3, width=4)
 ```
 
 # Individual data
 
-Calculate Proportional Similarity index value for each coyote with eight or more scats.
+Calculate Proportional Similarity index (PSi) values for each coyote with eight or more scats.
 
 ```{r}
 # Create subsampled dataset with 8 scats per individual and raw sequence reads
@@ -244,9 +251,6 @@ ind_samples <- inner_join(metadata, sp.RRA, by = "SampleID") %>%
 # Calculate PSi values for every coyote in the data set
 PSi_all = PSicalc(rinsp_geno_RRA, pop.diet = "average", exclude = FALSE, replicates=999, precision = 1e-9)
 
-# Range of PSi value in the population
-hist(temp$PSi, xlim = c(0, 1))
-
 # Create list of 22 frequently sampled coyotes with 8 or more scats
 coyote.names <- ind_samples$Individual
 
@@ -254,10 +258,27 @@ coyote.names <- ind_samples$Individual
 PSi_all_df <- data.frame(PSi = PSi_all$PSi) %>% 
   mutate(ID = seq(1,nrow(.))) %>% 
   left_join(geno_RRA %>% select(c(ID, Individual, Family.Group)), by="ID") %>% 
-  filter(Individual %in% coyote.names)
+  filter(Individual %in% coyote.names) %>% 
+  left_join(ind_samples, by="Individual")
+
+# View the results
+arrange(PSi_all_df, PSi)
+
+# Plot as function of sample size
+ggplot(PSi_all_df)+
+  geom_point(aes(x=count, y=PSi))+
+  geom_smooth(aes(x=count, y=PSi),method="lm")+
+  scale_x_continuous(breaks=c(seq(0,25,by=1)))+
+  theme_custom()
+
+# Test the effect of sample size on PSi values
+mod.PSi<-  gam(PSi ~ count, family=betar(link="logit"), data = PSi_all_df)
+summary(mod.PSi) # not significant
 ```
 
-Overlay PSi values onto stacked bar plot showing diet variation among frequently sample coyotes. NOTE - prior to running this code the stacked bar plot (p.ind_stackedbar) from the Diet-Plots.Rmd file must be generated.
+## Figure 4
+
+Overlay PSi values onto stacked bar plot visualizing diet variation among frequently sampled coyotes. NOTE - prior to running this code the stacked bar plot (p.ind_stackedbar) from the Diet-Plots.Rmd file must be generated. This can be produced by running the code in Diet-Plot.Rmd from line 308.
 
 ```{r}
 # Plot PSi values faceted by family group
@@ -283,17 +304,13 @@ p.diet <- p.ind_stackedbar +
         axis.text.x=element_text(color="#504f4f"))
 
 # Align plots
-p.aligned <- align_plots(p.diet, p.PSi, align = c("hv"), axis = 'rlbt')
+p.aligned <- cowplot::align_plots(p.diet, p.PSi, align = c("hv"), axis = 'rlbt')
 
 # Overlay plots
 ggdraw() +
   draw_plot(p.aligned[[1]], 0, 0, 1, 1) +
   draw_plot(p.aligned[[2]], 0, 0, 1, 1)
 
-
-ggsave("diet.PSi.png", dpi=600, height=4, width=6.5)
+# Save plot
+#ggsave("diet.PSi.png", dpi=600, height=4, width=6.5)
 ```
-
-
-
-
